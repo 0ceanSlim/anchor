@@ -1,0 +1,28 @@
+mod witness {
+}
+mod param {
+    const LP_ASSET_ID: u256 = 0x0000000000000000000000000000000000000000000000000000000000000002;
+    const LP_RETURN_INPUT: u32 = 3;
+    const LP_RESERVE_OUTPUT: u32 = 2;
+}
+
+fn main() {
+    let (_, c_lp_reserve): (Asset1, Amount1) = jet::current_amount();
+    let lp_reserve: u64 = unwrap_right::<(u1, u256)>(c_lp_reserve);
+    let (_, c_new_lp_reserve): (Asset1, Amount1) = unwrap(jet::output_amount(param::LP_RESERVE_OUTPUT));
+    let new_lp_reserve: u64 = unwrap_right::<(u1, u256)>(c_new_lp_reserve);
+    let new_script: u256 = unwrap(jet::output_script_hash(param::LP_RESERVE_OUTPUT));
+    let my_script: u256 = jet::current_script_hash();
+    assert!(jet::eq_256(new_script, my_script));
+    let c_out_asset: Asset1 = unwrap(jet::output_asset(param::LP_RESERVE_OUTPUT));
+    let out_asset: u256 = unwrap_right::<(u1, u256)>(c_out_asset);
+    assert!(jet::eq_256(out_asset, param::LP_ASSET_ID));
+    assert!(jet::lt_64(lp_reserve, new_lp_reserve));
+    let (_, lp_returned): (bool, u64) = jet::subtract_64(new_lp_reserve, lp_reserve);
+    let c_lp_asset: Asset1 = unwrap(jet::input_asset(param::LP_RETURN_INPUT));
+    let lp_asset: u256 = unwrap_right::<(u1, u256)>(c_lp_asset);
+    assert!(jet::eq_256(lp_asset, param::LP_ASSET_ID));
+    let (_, c_lp_amount): (Asset1, Amount1) = unwrap(jet::input_amount(param::LP_RETURN_INPUT));
+    let lp_amount: u64 = unwrap_right::<(u1, u256)>(c_lp_amount);
+    assert!(jet::le_64(lp_returned, lp_amount));
+}

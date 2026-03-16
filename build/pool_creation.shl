@@ -1,0 +1,44 @@
+mod witness {
+    const LP_MINTED: u64 = 0x0000000000000000;
+}
+mod param {
+    const ASSET0: u256 = 0x0000000000000000000000000000000000000000000000000000000000000000;
+    const ASSET1: u256 = 0x0000000000000000000000000000000000000000000000000000000000000001;
+    const LP_PREMINT: u64 = 0;
+}
+
+fn main() {
+    let lp_minted: u64 = witness::LP_MINTED;
+    let (_, c_deposit0): (Asset1, Amount1) = unwrap(jet::output_amount(0));
+    let deposit0: u64 = unwrap_right::<(u1, u256)>(c_deposit0);
+    let (_, c_deposit1): (Asset1, Amount1) = unwrap(jet::output_amount(1));
+    let deposit1: u64 = unwrap_right::<(u1, u256)>(c_deposit1);
+    let c_asset0_out: Asset1 = unwrap(jet::output_asset(0));
+    let asset0_out: u256 = unwrap_right::<(u1, u256)>(c_asset0_out);
+    let c_asset1_out: Asset1 = unwrap(jet::output_asset(1));
+    let asset1_out: u256 = unwrap_right::<(u1, u256)>(c_asset1_out);
+    assert!(jet::eq_256(asset0_out, param::ASSET0));
+    assert!(jet::eq_256(asset1_out, param::ASSET1));
+    let o_issued_amount: Option<Amount1> = unwrap(jet::issuance_asset_amount(0));
+    let c_issued_amount: Amount1 = unwrap(o_issued_amount);
+    let issued_amount: u64 = unwrap_right::<(u1, u256)>(c_issued_amount);
+    assert!(jet::eq_64(issued_amount, param::LP_PREMINT));
+    let (_, c_lp_reserve_out): (Asset1, Amount1) = unwrap(jet::output_amount(2));
+    let lp_reserve_out: u64 = unwrap_right::<(u1, u256)>(c_lp_reserve_out);
+    let (_, lp_reserve_expected): (bool, u64) = jet::subtract_64(param::LP_PREMINT, lp_minted);
+    assert!(jet::eq_64(lp_reserve_out, lp_reserve_expected));
+    let k_initial: u128 = jet::multiply_64(deposit0, deposit1);
+    let lp_sq: u128 = jet::multiply_64(lp_minted, lp_minted);
+    let (le_a_hi, le_a_lo): (u64, u64) = <u128>::into(lp_sq);
+    let (le_b_hi, le_b_lo): (u64, u64) = <u128>::into(k_initial);
+    let (le_borrow_lo, _): (bool, u64) = jet::full_subtract_64(false, le_b_lo, le_a_lo);
+    let (le_borrow_hi, _): (bool, u64) = jet::full_subtract_64(le_borrow_lo, le_b_hi, le_a_hi);
+    unwrap_left::<()>(<bool>::into(le_borrow_hi));
+    let (_, lp_plus1): (bool, u64) = jet::add_64(lp_minted, 1);
+    let lp_plus1_sq: u128 = jet::multiply_64(lp_plus1, lp_plus1);
+    let (lt_a_hi, lt_a_lo): (u64, u64) = <u128>::into(k_initial);
+    let (lt_b_hi, lt_b_lo): (u64, u64) = <u128>::into(lp_plus1_sq);
+    let (lt_borrow_lo, _): (bool, u64) = jet::full_subtract_64(true, lt_b_lo, lt_a_lo);
+    let (lt_borrow_hi, _): (bool, u64) = jet::full_subtract_64(lt_borrow_lo, lt_b_hi, lt_a_hi);
+    unwrap_left::<()>(<bool>::into(lt_borrow_hi));
+}

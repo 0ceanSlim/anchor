@@ -1,0 +1,59 @@
+mod witness {
+}
+mod param {
+    const ASSET0: u256 = 0x0000000000000000000000000000000000000000000000000000000000000000;
+    const ASSET1: u256 = 0x0000000000000000000000000000000000000000000000000000000000000001;
+    const LP_ASSET_ID: u256 = 0x0000000000000000000000000000000000000000000000000000000000000002;
+    const LP_PREMINT: u64 = 0;
+    const POOL_INPUT_B: u32 = 1;
+    const LP_RESERVE_INPUT: u32 = 2;
+    const LP_RETURN_INPUT: u32 = 3;
+    const POOL_OUTPUT_A: u32 = 0;
+    const POOL_OUTPUT_B: u32 = 1;
+    const LP_RESERVE_OUTPUT: u32 = 2;
+}
+
+fn main() {
+    let (_, c_reserve0): (Asset1, Amount1) = jet::current_amount();
+    let reserve0: u64 = unwrap_right::<(u1, u256)>(c_reserve0);
+    let (_, c_reserve1): (Asset1, Amount1) = unwrap(jet::input_amount(param::POOL_INPUT_B));
+    let reserve1: u64 = unwrap_right::<(u1, u256)>(c_reserve1);
+    let (_, c_new_reserve0): (Asset1, Amount1) = unwrap(jet::output_amount(param::POOL_OUTPUT_A));
+    let new_reserve0: u64 = unwrap_right::<(u1, u256)>(c_new_reserve0);
+    let (_, c_new_reserve1): (Asset1, Amount1) = unwrap(jet::output_amount(param::POOL_OUTPUT_B));
+    let new_reserve1: u64 = unwrap_right::<(u1, u256)>(c_new_reserve1);
+    let c_asset0_out: Asset1 = unwrap(jet::output_asset(param::POOL_OUTPUT_A));
+    let asset0_out: u256 = unwrap_right::<(u1, u256)>(c_asset0_out);
+    let c_asset1_out: Asset1 = unwrap(jet::output_asset(param::POOL_OUTPUT_B));
+    let asset1_out: u256 = unwrap_right::<(u1, u256)>(c_asset1_out);
+    assert!(jet::eq_256(asset0_out, param::ASSET0));
+    assert!(jet::eq_256(asset1_out, param::ASSET1));
+    let new_script_a: u256 = unwrap(jet::output_script_hash(param::POOL_OUTPUT_A));
+    let my_script: u256 = jet::current_script_hash();
+    assert!(jet::eq_256(new_script_a, my_script));
+    assert!(jet::lt_64(new_reserve0, reserve0));
+    let (_, c_lp_reserve): (Asset1, Amount1) = unwrap(jet::input_amount(param::LP_RESERVE_INPUT));
+    let lp_reserve: u64 = unwrap_right::<(u1, u256)>(c_lp_reserve);
+    let (_, c_new_lp_reserve): (Asset1, Amount1) = unwrap(jet::output_amount(param::LP_RESERVE_OUTPUT));
+    let new_lp_reserve: u64 = unwrap_right::<(u1, u256)>(c_new_lp_reserve);
+    let (_, total_supply): (bool, u64) = jet::subtract_64(param::LP_PREMINT, lp_reserve);
+    let (_, lp_burned): (bool, u64) = jet::subtract_64(new_lp_reserve, lp_reserve);
+    let c_lp_asset: Asset1 = unwrap(jet::input_asset(param::LP_RETURN_INPUT));
+    let lp_asset: u256 = unwrap_right::<(u1, u256)>(c_lp_asset);
+    assert!(jet::eq_256(lp_asset, param::LP_ASSET_ID));
+    let (_, payout0): (bool, u64) = jet::subtract_64(reserve0, new_reserve0);
+    let payout0_times_supply: u128 = jet::multiply_64(payout0, total_supply);
+    let lp_burned_times_reserve0: u128 = jet::multiply_64(lp_burned, reserve0);
+    let (le_a_hi, le_a_lo): (u64, u64) = <u128>::into(payout0_times_supply);
+    let (le_b_hi, le_b_lo): (u64, u64) = <u128>::into(lp_burned_times_reserve0);
+    let (le_borrow_lo, _): (bool, u64) = jet::full_subtract_64(false, le_b_lo, le_a_lo);
+    let (le_borrow_hi, _): (bool, u64) = jet::full_subtract_64(le_borrow_lo, le_b_hi, le_a_hi);
+    unwrap_left::<()>(<bool>::into(le_borrow_hi));
+    let (_, payout0_plus1): (bool, u64) = jet::add_64(payout0, 1);
+    let payout0_plus1_times_supply: u128 = jet::multiply_64(payout0_plus1, total_supply);
+    let (le_a_hi, le_a_lo): (u64, u64) = <u128>::into(lp_burned_times_reserve0);
+    let (le_b_hi, le_b_lo): (u64, u64) = <u128>::into(payout0_plus1_times_supply);
+    let (le_borrow_lo, _): (bool, u64) = jet::full_subtract_64(false, le_b_lo, le_a_lo);
+    let (le_borrow_hi, _): (bool, u64) = jet::full_subtract_64(le_borrow_lo, le_b_hi, le_a_hi);
+    unwrap_left::<()>(<bool>::into(le_borrow_hi));
+}

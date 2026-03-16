@@ -1,0 +1,50 @@
+mod witness {
+}
+mod param {
+    const ASSET0: u256 = 0x0000000000000000000000000000000000000000000000000000000000000000;
+    const ASSET1: u256 = 0x0000000000000000000000000000000000000000000000000000000000000001;
+    const FEE_NUM: u64 = 1;
+    const FEE_DEN: u64 = 1;
+    const FEE_DIFF: u64 = 0;
+    const POOL_INPUT_A: u32 = 0;
+    const POOL_OUTPUT_A: u32 = 0;
+    const POOL_OUTPUT_B: u32 = 1;
+}
+
+fn main() {
+    let (_, c_reserve1): (Asset1, Amount1) = jet::current_amount();
+    let reserve1: u64 = unwrap_right::<(u1, u256)>(c_reserve1);
+    let (_, c_reserve0): (Asset1, Amount1) = unwrap(jet::input_amount(param::POOL_INPUT_A));
+    let reserve0: u64 = unwrap_right::<(u1, u256)>(c_reserve0);
+    let (_, c_new_reserve0): (Asset1, Amount1) = unwrap(jet::output_amount(param::POOL_OUTPUT_A));
+    let new_reserve0: u64 = unwrap_right::<(u1, u256)>(c_new_reserve0);
+    let (_, c_new_reserve1): (Asset1, Amount1) = unwrap(jet::output_amount(param::POOL_OUTPUT_B));
+    let new_reserve1: u64 = unwrap_right::<(u1, u256)>(c_new_reserve1);
+    let c_asset0_out: Asset1 = unwrap(jet::output_asset(param::POOL_OUTPUT_A));
+    let asset0_out: u256 = unwrap_right::<(u1, u256)>(c_asset0_out);
+    let c_asset1_out: Asset1 = unwrap(jet::output_asset(param::POOL_OUTPUT_B));
+    let asset1_out: u256 = unwrap_right::<(u1, u256)>(c_asset1_out);
+    assert!(jet::eq_256(asset0_out, param::ASSET0));
+    assert!(jet::eq_256(asset1_out, param::ASSET1));
+    let new_script_b: u256 = unwrap(jet::output_script_hash(param::POOL_OUTPUT_B));
+    let my_script: u256 = jet::current_script_hash();
+    assert!(jet::eq_256(new_script_b, my_script));
+    let fa_t1: u128 = jet::multiply_64(reserve1, param::FEE_DIFF);
+    let fa_t2: u128 = jet::multiply_64(new_reserve1, param::FEE_NUM);
+    let (fa_t1_hi, fa_t1_lo): (u64, u64) = <u128>::into(fa_t1);
+    let (fa_t2_hi, fa_t2_lo): (u64, u64) = <u128>::into(fa_t2);
+    assert!(jet::eq_64(fa_t1_hi, 0));
+    assert!(jet::eq_64(fa_t2_hi, 0));
+    let (fa_carry, fa_adj_lo): (bool, u64) = jet::add_64(fa_t1_lo, fa_t2_lo);
+    unwrap_left::<()>(<bool>::into(fa_carry));
+    let fa_lhs: u128 = jet::multiply_64(fa_adj_lo, new_reserve0);
+    let fa_r0d: u128 = jet::multiply_64(reserve1, param::FEE_DEN);
+    let (fa_r0d_hi, fa_r0d_lo): (u64, u64) = <u128>::into(fa_r0d);
+    assert!(jet::eq_64(fa_r0d_hi, 0));
+    let fa_rhs: u128 = jet::multiply_64(fa_r0d_lo, reserve0);
+    let (fa_lhs_hi, fa_lhs_lo): (u64, u64) = <u128>::into(fa_lhs);
+    let (fa_rhs_hi, fa_rhs_lo): (u64, u64) = <u128>::into(fa_rhs);
+    let (fa_borrow_lo, _): (bool, u64) = jet::full_subtract_64(false, fa_lhs_lo, fa_rhs_lo);
+    let (fa_borrow_hi, _): (bool, u64) = jet::full_subtract_64(fa_borrow_lo, fa_lhs_hi, fa_rhs_hi);
+    unwrap_left::<()>(<bool>::into(fa_borrow_hi));
+}

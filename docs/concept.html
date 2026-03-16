@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="icon" type="image/svg+xml" href="docs/anchor.svg" />
+    <link rel="icon" type="image/svg+xml" href="docs/anchor.svg" />
+    <title>Anchor Protocol</title>
+
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <style>
+      :root {
+        --anchor-bg: #0e1436;
+        --anchor-teal: #2bdfc6;
+        --anchor-green: #82dd7c;
+        --anchor-deep: #1b8d98;
+      }
+
+      body {
+        background: radial-gradient(circle at top, #121a4d 0%, #0e1436 60%);
+      }
+
+      .glow {
+        box-shadow:
+          0 0 10px rgba(43, 223, 198, 0.4),
+          0 0 30px rgba(43, 223, 198, 0.2);
+      }
+
+      .glow-green {
+        box-shadow: 0 0 12px rgba(130, 221, 124, 0.4);
+      }
+    </style>
+  </head>
+
+  <body class="font-sans text-gray-200">
+    <div class="flex h-screen">
+      <!-- SIDEBAR -->
+
+      <aside
+        class="w-64 bg-[#0b102b] border-r border-[#1b8d98]/30 flex flex-col"
+      >
+        <div class="p-6 border-b border-[#1b8d98]/30 flex items-center gap-3">
+          <!-- logo -->
+          <div class="w-10 h-10">
+            <img src="docs/anchor.svg" alt="Anchor logo" class="w-10 h-10" />
+          </div>
+
+          <div>
+            <div class="font-semibold tracking-wide">Anchor</div>
+            <div class="text-xs text-gray-400">Liquid AMM</div>
+          </div>
+        </div>
+
+        <nav class="flex-1 p-4 space-y-2 text-sm">
+          <a
+            class="block px-4 py-2 rounded-lg bg-[#1b8d98]/20 text-[#2bdfc6] glow"
+          >
+            Swap
+          </a>
+
+          <a
+            class="block px-4 py-2 rounded-lg hover:bg-[#1b8d98]/20 hover:text-[#2bdfc6]"
+          >
+            Pools
+          </a>
+
+          <a
+            class="block px-4 py-2 rounded-lg hover:bg-[#1b8d98]/20 hover:text-[#2bdfc6]"
+          >
+            Liquidity
+          </a>
+
+          <a
+            class="block px-4 py-2 rounded-lg hover:bg-[#1b8d98]/20 hover:text-[#2bdfc6]"
+          >
+            Analytics
+          </a>
+
+          <a
+            class="block px-4 py-2 rounded-lg hover:bg-[#1b8d98]/20 hover:text-[#2bdfc6]"
+          >
+            Contracts
+          </a>
+        </nav>
+
+        <div class="p-4 text-xs text-gray-400 border-t border-[#1b8d98]/30">
+          Simplicity Contracts<br />
+          Liquid Network
+        </div>
+      </aside>
+
+      <!-- MAIN -->
+
+      <main class="flex flex-col flex-1">
+        <header
+          class="flex justify-between items-center p-4 border-b border-[#1b8d98]/20"
+        >
+          <div class="text-sm text-gray-400">
+            Decentralized Liquidity on Liquid
+          </div>
+
+          <button
+            class="px-4 py-2 rounded-lg bg-[#2bdfc6] text-black font-medium glow hover:brightness-110"
+          >
+            Connect Wallet
+          </button>
+        </header>
+
+        <div class="flex items-center justify-center flex-1">
+          <!-- SWAP CARD -->
+
+          <div
+            class="w-[420px] bg-[#0b102b] border border-[#1b8d98]/30 rounded-2xl p-6 glow"
+          >
+            <div class="flex items-center justify-between mb-4">
+              <h2 class="text-lg font-semibold text-[#2bdfc6]">Swap</h2>
+
+              <div class="text-xs text-gray-400">0.30% fee</div>
+            </div>
+
+            <!-- PAY -->
+
+            <div class="bg-[#0e1436] border border-[#1b8d98]/30 rounded-xl p-4">
+              <div class="flex justify-between mb-2 text-xs text-gray-400">
+                <span>You Pay</span>
+                <span>Balance: 0</span>
+              </div>
+
+              <div class="flex items-center justify-between">
+                <input
+                  class="w-full text-xl bg-transparent outline-none"
+                  placeholder="0.0"
+                />
+
+                <button
+                  class="ml-2 px-3 py-1 rounded-md bg-[#1b8d98]/40 text-[#2bdfc6]"
+                >
+                  L-BTC
+                </button>
+              </div>
+            </div>
+
+            <div class="flex justify-center my-4">
+              <button
+                class="bg-[#1b8d98]/30 p-2 rounded-lg hover:bg-[#1b8d98]/50"
+              >
+                ↓
+              </button>
+            </div>
+
+            <!-- RECEIVE -->
+
+            <div class="bg-[#0e1436] border border-[#1b8d98]/30 rounded-xl p-4">
+              <div class="flex justify-between mb-2 text-xs text-gray-400">
+                <span>You Receive</span>
+                <span>Balance: 0</span>
+              </div>
+
+              <div class="flex items-center justify-between">
+                <input
+                  class="w-full text-xl bg-transparent outline-none"
+                  placeholder="0.0"
+                />
+
+                <button
+                  class="ml-2 px-3 py-1 rounded-md bg-[#1b8d98]/40 text-[#82dd7c]"
+                >
+                  USDT
+                </button>
+              </div>
+            </div>
+
+            <div class="mt-4 space-y-1 text-xs text-gray-400">
+              <div class="flex justify-between">
+                <span>Rate</span>
+                <span>1 L-BTC ≈ 63,400 USDT</span>
+              </div>
+
+              <div class="flex justify-between">
+                <span>Slippage</span>
+                <span>0.5%</span>
+              </div>
+
+              <div class="flex justify-between">
+                <span>Route</span>
+                <span class="text-[#82dd7c]">Anchor Pool</span>
+              </div>
+            </div>
+
+            <button
+              class="w-full mt-5 py-3 rounded-xl bg-[#82dd7c] text-black font-semibold glow-green hover:brightness-110"
+            >
+              Execute Swap
+            </button>
+          </div>
+        </div>
+      </main>
+    </div>
+  </body>
+</html>

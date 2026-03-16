@@ -1,0 +1,22 @@
+{
+  "LP_ASSET_ID": {
+    "value": "0x1fe5a6f0c1aec47a020060b0d2ad21e33c9329bde3957663b87fb30827628065",
+    "type": "u256"
+  },
+  "LP_PREMINT": {
+    "value": "2000000000000000",
+    "type": "u64"
+  },
+  "LP_RESERVE_OUTPUT": {
+    "value": "2",
+    "type": "u32"
+  },
+  "POOL_A_INPUT": {
+    "value": "0",
+    "type": "u32"
+  },
+  "POOL_B_INPUT": {
+    "value": "1",
+    "type": "u32"
+  }
+}

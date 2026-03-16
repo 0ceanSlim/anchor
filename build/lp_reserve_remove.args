@@ -1,0 +1,14 @@
+{
+  "LP_ASSET_ID": {
+    "value": "0x1fe5a6f0c1aec47a020060b0d2ad21e33c9329bde3957663b87fb30827628065",
+    "type": "u256"
+  },
+  "LP_RESERVE_OUTPUT": {
+    "value": "2",
+    "type": "u32"
+  },
+  "LP_RETURN_INPUT": {
+    "value": "3",
+    "type": "u32"
+  }
+}
