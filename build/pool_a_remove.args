@@ -8,7 +8,7 @@
     "type": "u256"
   },
   "LP_ASSET_ID": {
-    "value": "0x1fe5a6f0c1aec47a020060b0d2ad21e33c9329bde3957663b87fb30827628065",
+    "value": "0xfd12df5911b3f2bc592451a9518a8e70fd7e82dfa61593a4a553513a5d12edac",
     "type": "u256"
   },
   "LP_PREMINT": {
