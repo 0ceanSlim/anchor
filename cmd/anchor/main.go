@@ -1002,8 +1002,6 @@ func cmdAddLiquidity() *cobra.Command {
 				}
 
 				// Get LP asset ID: try pool.json, then walk back from pool UTXO creating tx.
-				// In every pool operation tx, pool_a is vin[0]. Walk back until we find
-				// the creation tx (has ANCHR OP_RETURN), then compute LP asset from its vin[0].
 				wizLPAsset := ""
 				if saved, loadErr := pool.Load(poolFile); loadErr == nil {
 					if strings.EqualFold(saved.Asset0, selA0.id) && strings.EqualFold(saved.Asset1, selA1.id) {

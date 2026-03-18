@@ -395,18 +395,21 @@ the proportional deposit check passes trivially, new LP is minted at
 
 ### Duplicate pools
 
-Same parameters (asset0, asset1, feeNum, feeDen) produce the same taproot addresses. The
-protocol does not prevent multiple pools from existing at the same address — it is
+Multiple pools can exist for the same asset pair and fee parameters. The protocol is
 permissionless and has no global registry.
 
-**Pool ID = LP asset ID.** Each pool has a unique LP asset ID derived from its creation
-UTXO outpoint. This is the only globally unique on-chain identifier per pool. The
-`lp_reserve` UTXOs at a shared address are distinguishable by LP asset ID; the `pool_a` and
-`pool_b` UTXOs are not directly distinguishable — correct routing requires tracing back to
-the creation transaction.
+**Each pool has unique addresses.** `LP_ASSET_ID` is baked into the remove and lp_reserve
+contracts at compile time. Since `LP_ASSET_ID` is derived from the creation UTXO outpoint
+(which is unique per pool), the remove-variant CMRs differ between pools — producing
+different dual-leaf taproot addresses even when all other parameters match. Only the
+swap-variant CMRs are deterministic from `(asset0, asset1, feeNum, feeDen)` alone, but
+the dual-leaf address depends on both leaves.
 
-When multiple pools exist at the same address, operations default to the pool with the most
-liquidity (highest reserve). A `--pool <lp-asset-id>` flag allows explicit targeting.
+**Pool ID = LP asset ID.** Each pool has a unique LP asset ID derived from its creation
+UTXO outpoint. This is the only globally unique on-chain identifier per pool.
+
+When multiple pools exist for the same asset pair, operations default to the pool with the
+deepest liquidity. A `--pool <lp-asset-id>` flag allows explicit targeting.
 
 ### Pool discovery
 
@@ -420,9 +423,14 @@ Pool creation transactions include an OP_RETURN output encoding the pool paramet
 [2]  feeDen:  uint16 big-endian
 ```
 
-The pool taproot address is deterministic from these parameters and does not need to be
-stored in the OP_RETURN. Any node can enumerate all anchor pools by scanning for ANCHR
-OP_RETURNs and deriving the corresponding addresses.
+Pool addresses **cannot** be derived from these parameters alone — `LP_ASSET_ID` (which
+affects the remove-variant CMRs and thus the taproot addresses) is only known from the
+creation transaction. Discovering pools requires scanning the chain for ANCHR OP_RETURN
+outputs, then decoding each creation transaction to derive the LP asset ID and pool
+addresses. The `anchor find-pools` command performs this scan.
+
+An indexed backend such as Electrs/Esplora significantly accelerates pool discovery by
+providing block and transaction lookups without scanning the full UTXO set.
 
 ---
 
@@ -432,9 +440,11 @@ The `anchor compile` and `anchor create-pool` commands handle this automatically
 
 **Phase 1 — `anchor compile`** (fee constants only, no LP asset ID yet):
 ```bash
-# 1. Set FEE_NUM and FEE_DEN in pool_a.shl, pool_b.shl, lp_reserve.shl
+# 1. Set ASSET0, ASSET1, FEE_NUM, FEE_DEN in .args files
 # 2. Compile pool_creation.shl to get its CMR and binary
 # 3. Write pool.json with pool_creation address
+# NOTE: pool_a/b/lp_reserve addresses are NOT final here — they depend on
+# LP_ASSET_ID which is only known after the creation UTXO is chosen.
 ```
 
 **Phase 2 — `anchor create-pool`** (LP asset ID known from chosen creation UTXO):
