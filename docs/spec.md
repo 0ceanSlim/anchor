@@ -543,3 +543,60 @@ fee estimation (build → measure → rebuild) is a planned improvement.
 - **Self-covenant** — each pool UTXO checks its own script hash in the output, forming a permanent chain
 - **Unspendable key path** — the NUMS internal key makes key-path taproot spends provably impossible; the pool can only be spent via a valid Simplicity script leaf
 - **LP Reserve integrity** — the LP Reserve contract only releases tokens during valid add-liquidity operations and only accepts tokens during valid remove-liquidity operations; direct withdrawal is impossible
+
+---
+
+## Transaction Chaining and Mempool Considerations
+
+### The single-spender bottleneck
+
+Each pool operation consumes the current pool UTXOs and produces new ones. Only one transaction
+can spend a given UTXO — so two concurrent operations against the same confirmed pool state will
+conflict, and only one will be accepted. On a chain with 1-minute block times this is manageable
+at low volume, but at scale it becomes the primary throughput constraint.
+
+### Transaction chaining
+
+Clients SHOULD implement **transaction chaining**: building a new operation that spends the
+*unconfirmed outputs* of a pending pool transaction rather than waiting for confirmation. A chain
+of N pending swaps can execute within a single block interval, giving the pool effective
+throughput of N operations per block instead of 1.
+
+Chaining requires knowing the exact outpoints and output values of pending transactions before
+they confirm. This is not practical with the Elements chain RPC alone (`gettxout` only returns
+confirmed UTXOs, and `getrawmempool` + decode is slow). Clients that implement chaining will
+need an indexed mempool-aware backend such as **Electrs/Esplora**, which provides:
+
+- `/address/:addr/txs/mempool` — pending transactions at a pool address
+- `/tx/:txid` — full decoded transaction (outputs, values, assets)
+- `/address/:addr/utxo` — confirmed + unconfirmed UTXOs at an address
+
+Without an indexed backend, clients are limited to one operation per block per pool.
+
+### Chain invalidation and fee competition
+
+A transaction chain is only as strong as its first link. If any transaction in the chain is
+replaced or outbid by a conflicting transaction that spends the same confirmed pool UTXOs, the
+entire chain is invalidated.
+
+This creates a tension: a single high-fee transaction that conflicts with the base of a chain
+can invalidate N pending operations. Clients are **discouraged** from broadcasting transactions
+that spend confirmed pool UTXOs when a pending chain already exists at that pool — doing so
+invalidates every chained transaction, harming all users who built on top of the chain.
+
+That said, this cannot be enforced at the protocol level, and in a free market the ability to
+outbid exists for good reason — it is the mechanism by which price-sensitive actors correct
+stale chains or capture arbitrage. A sufficiently sophisticated client could even detect an
+existing chain, evaluate whether outbidding it is profitable, and offer that option to the user.
+
+### Practical impact
+
+With Liquid's 1-minute block times, the single-spender bottleneck is unlikely to be a problem
+for most pools in early adoption. Transaction chaining becomes important when:
+
+- A pool sees sustained volume (multiple swaps per minute)
+- Liquidity operations need to execute without waiting for confirmation
+- Multiple users interact with the same pool concurrently
+
+Clients that only target single-user or low-frequency use cases can safely ignore chaining and
+simply retry on `txn-mempool-conflict` after the next block.
