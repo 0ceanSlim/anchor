@@ -19,6 +19,7 @@ func cmdSwap() *cobra.Command {
 		lbtcAsset, asset0, asset1            string
 		broadcast                            bool
 		walletName                           string
+		poolID, esploraURL, buildDir         string
 	)
 	cmd := &cobra.Command{
 		Use:   "swap",
@@ -26,6 +27,16 @@ func cmdSwap() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			rpcURL, rpcUser, rpcPass = resolveRPC(rpcURL, rpcUser, rpcPass)
 			netName = resolveNetwork(netName)
+
+			// --pool-id: resolve to saved config.
+			if poolID != "" {
+				resolved, err := resolvePoolID(poolID, esploraURL, buildDir, netName)
+				if err != nil {
+					return err
+				}
+				poolFile = resolved
+			}
+
 			resolved, err := resolvePoolFile(cmd, poolFile)
 			if err != nil {
 				return err
@@ -364,5 +375,8 @@ func cmdSwap() *cobra.Command {
 	cmd.Flags().StringVar(&rpcPass, "rpc-pass", "", "RPC password (env: ANCHOR_RPC_PASS)")
 	cmd.Flags().BoolVar(&broadcast, "broadcast", false, "Broadcast transaction via RPC")
 	cmd.Flags().StringVar(&netName, "network", "", "Network: liquid, testnet, regtest (env: ANCHOR_NETWORK)")
+	cmd.Flags().StringVar(&poolID, "pool-id", "", "Resolve pool by LP asset / pool ID (via Esplora)")
+	cmd.Flags().StringVar(&esploraURL, "esplora-url", "", "Esplora API URL (env: ANCHOR_ESPLORA_URL)")
+	cmd.Flags().StringVar(&buildDir, "build-dir", "./build", "Directory containing .shl and .args files")
 	return cmd
 }

@@ -141,6 +141,144 @@ type discoveredPool struct {
 	creationVinV  uint32 // vin[0] vout from creation tx
 }
 
+// lookupPoolByID resolves a single pool by its LP asset / pool ID via Esplora.
+// Looks up the asset's issuance tx (which is the pool creation tx), extracts
+// pool addresses and fee params from the OP_RETURN, queries live reserves.
+// If buildDir and net are provided, verifies contract compatibility.
+func lookupPoolByID(esploraURL, poolID, buildDir string, net *network.Network) (*discoveredPool, error) {
+	if esploraURL == "" {
+		return nil, fmt.Errorf("--pool-id requires Esplora (set ANCHOR_ESPLORA_URL or --esplora-url)")
+	}
+	ec := esplora.New(esploraURL)
+
+	// Look up the asset to find its issuance transaction.
+	assetInfo, err := ec.GetAsset(poolID)
+	if err != nil {
+		return nil, fmt.Errorf("lookup asset %s: %w", poolID[:16]+"...", err)
+	}
+	if assetInfo.IssuanceTxIn == nil {
+		return nil, fmt.Errorf("asset %s has no issuance info", poolID[:16]+"...")
+	}
+
+	// The issuance tx IS the pool creation tx.
+	creationTx, err := ec.GetTx(assetInfo.IssuanceTxIn.TxID)
+	if err != nil {
+		return nil, fmt.Errorf("get creation tx %s: %w", assetInfo.IssuanceTxIn.TxID[:16]+"...", err)
+	}
+	if len(creationTx.Vout) < 3 || len(creationTx.Vin) == 0 {
+		return nil, fmt.Errorf("creation tx %s has unexpected layout", assetInfo.IssuanceTxIn.TxID[:16]+"...")
+	}
+
+	// Extract pool addresses from outputs.
+	poolAAddr := creationTx.Vout[0].ScriptPubKeyAddr
+	poolBAddr := creationTx.Vout[1].ScriptPubKeyAddr
+	if poolAAddr == "" || poolBAddr == "" {
+		return nil, fmt.Errorf("creation tx missing pool addresses")
+	}
+
+	// Parse fee params from ANCHR OP_RETURN.
+	var asset0, asset1 string
+	var feeNum, feeDen uint16
+	for _, vout := range creationTx.Vout {
+		rec, ok := esplora.ParseAnchorOutput(vout.ScriptPubKey, creationTx.TxID, creationTx.Status.BlockHeight)
+		if ok {
+			asset0 = rec.Asset0
+			asset1 = rec.Asset1
+			feeNum = rec.FeeNum
+			feeDen = rec.FeeDen
+			break
+		}
+	}
+	if asset0 == "" {
+		return nil, fmt.Errorf("creation tx %s has no ANCHR OP_RETURN — cannot determine asset pair", assetInfo.IssuanceTxIn.TxID[:16]+"...")
+	}
+
+	// Derive LP asset ID from creation tx vin[0].
+	lpID, err := tx.ComputeLPAssetID(creationTx.Vin[0].TxID, creationTx.Vin[0].Vout)
+	if err != nil {
+		return nil, fmt.Errorf("compute LP asset: %w", err)
+	}
+	lpAsset := hex.EncodeToString(revBytes(lpID[:]))
+
+	// Query live reserves.
+	utxosA, err := ec.GetAddressUTXOs(poolAAddr)
+	if err != nil {
+		return nil, fmt.Errorf("query pool_a UTXOs: %w", err)
+	}
+	utxosB, err := ec.GetAddressUTXOs(poolBAddr)
+	if err != nil {
+		return nil, fmt.Errorf("query pool_b UTXOs: %w", err)
+	}
+
+	var reserve0, reserve1 uint64
+	for _, u := range utxosA {
+		if strings.EqualFold(u.Asset, asset0) {
+			reserve0 += u.Value
+		}
+	}
+	for _, u := range utxosB {
+		if strings.EqualFold(u.Asset, asset1) {
+			reserve1 += u.Value
+		}
+	}
+
+	p := &discoveredPool{
+		txid:          creationTx.TxID,
+		asset0:        asset0,
+		asset1:        asset1,
+		feeNum:        feeNum,
+		feeDen:        feeDen,
+		height:        creationTx.Status.BlockHeight,
+		poolAAddr:     poolAAddr,
+		poolBAddr:     poolBAddr,
+		lpAsset:       lpAsset,
+		reserve0:      reserve0,
+		reserve1:      reserve1,
+		depth:         reserve0 * reserve1,
+		closed:        reserve0 == 0 && reserve1 == 0,
+		creationVinTx: creationTx.Vin[0].TxID,
+		creationVinV:  creationTx.Vin[0].Vout,
+	}
+
+	// Verify contract compatibility if buildDir and net are provided.
+	if buildDir != "" && net != nil {
+		fmt.Fprintf(os.Stderr, "Verifying pool compatibility with current contracts...\n")
+		lpAssetIDBytes, err := tx.ComputeLPAssetID(p.creationVinTx, p.creationVinV)
+		if err != nil {
+			return nil, fmt.Errorf("compute LP asset: %w", err)
+		}
+		feeDiff := uint64(p.feeDen) - uint64(p.feeNum)
+		patchMap := map[string]compiler.ArgsParam{
+			"ASSET0":     {Value: normalizeHex(p.asset0), Type: "u256"},
+			"ASSET1":     {Value: normalizeHex(p.asset1), Type: "u256"},
+			"FEE_NUM":    {Value: fmt.Sprintf("%d", p.feeNum), Type: "u64"},
+			"FEE_DEN":    {Value: fmt.Sprintf("%d", p.feeDen), Type: "u64"},
+			"FEE_DIFF":   {Value: fmt.Sprintf("%d", feeDiff), Type: "u64"},
+			"LP_PREMINT": {Value: fmt.Sprintf("%d", pool.LPPremint), Type: "u64"},
+		}
+		if err := compiler.PatchParams(buildDir, patchMap); err != nil {
+			return nil, fmt.Errorf("patch params: %w", err)
+		}
+		for _, shlName := range []string{
+			"pool_a_swap.shl", "pool_a_remove.shl",
+			"pool_b_swap.shl", "pool_b_remove.shl",
+			"lp_reserve_add.shl", "lp_reserve_remove.shl",
+		} {
+			shlPath := buildDir + "/" + shlName
+			_ = compiler.PatchLPAssetID(shlPath, shlPath, lpAssetIDBytes)
+		}
+		cfg, err := compiler.CompileAll(buildDir, net)
+		if err != nil {
+			return nil, fmt.Errorf("compile: %w", err)
+		}
+		if cfg.PoolA.Address != p.poolAAddr {
+			return nil, fmt.Errorf("pool %s was created with an older/incompatible contract version", poolID[:16]+"...")
+		}
+	}
+
+	return p, nil
+}
+
 // discoverPools scans the chain for ANCHR OP_RETURN pool announcements matching
 // the given asset pair. Uses Esplora if esploraURL is set, otherwise falls back
 // to RPC block-by-block scan. Verifies each pool's compatibility with the current

@@ -70,7 +70,7 @@ func ScanPoolCreations(c *Client, asset0, asset1 string, startHeight int) ([]Poo
 				}
 				for _, tx := range txs {
 					for _, vout := range tx.Vout {
-						rec, ok := parseAnchorOutput(vout.ScriptPubKey, tx.TxID, blk.Height)
+						rec, ok := ParseAnchorOutput(vout.ScriptPubKey, tx.TxID, blk.Height)
 						if !ok {
 							continue
 						}
@@ -92,8 +92,8 @@ func ScanPoolCreations(c *Client, asset0, asset1 string, startHeight int) ([]Poo
 	return records, nil
 }
 
-// parseAnchorOutput attempts to decode an ANCHR OP_RETURN from a scriptPubKey hex.
-func parseAnchorOutput(scriptHex, txid string, height int) (PoolCreationRecord, bool) {
+// ParseAnchorOutput attempts to decode an ANCHR OP_RETURN from a scriptPubKey hex.
+func ParseAnchorOutput(scriptHex, txid string, height int) (PoolCreationRecord, bool) {
 	if !strings.HasPrefix(strings.ToLower(scriptHex), anchorScriptPrefix) {
 		return PoolCreationRecord{}, false
 	}

@@ -23,6 +23,7 @@ func cmdAddLiquidity() *cobra.Command {
 		asset0, asset1, lbtcAsset, lpAssetID, netName, changeAddr string
 		broadcast                                                 bool
 		walletName                                                string
+		poolID, esploraURL                                        string
 	)
 	cmd := &cobra.Command{
 		Use:   "add-liquidity",
@@ -189,6 +190,16 @@ func cmdAddLiquidity() *cobra.Command {
 			}
 
 			// ── Flag mode: load pool config and proceed ────────────────────────────────
+
+			// --pool-id: resolve to saved config.
+			if poolID != "" {
+				resolvedID, idErr := resolvePoolID(poolID, esploraURL, buildDir, netName)
+				if idErr != nil {
+					return idErr
+				}
+				poolFile = resolvedID
+			}
+
 			resolved, resolveErr := resolvePoolFile(cmd, poolFile)
 			if resolveErr != nil {
 				return resolveErr
@@ -406,6 +417,8 @@ func cmdAddLiquidity() *cobra.Command {
 	cmd.Flags().BoolVar(&broadcast, "broadcast", false, "Broadcast transaction via RPC")
 	cmd.Flags().StringVar(&netName, "network", "", "Network: liquid, testnet, regtest (env: ANCHOR_NETWORK)")
 	cmd.Flags().StringVar(&buildDir, "build-dir", "./build", "Directory containing .shl files (used in wizard mode)")
+	cmd.Flags().StringVar(&poolID, "pool-id", "", "Resolve pool by LP asset / pool ID (via Esplora)")
+	cmd.Flags().StringVar(&esploraURL, "esplora-url", "", "Esplora API URL (env: ANCHOR_ESPLORA_URL)")
 	// deposit0 and deposit1 are optional — wizard mode if omitted.
 	return cmd
 }

@@ -8,7 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/0ceanslim/anchor/pkg/compiler"
 	"github.com/0ceanslim/anchor/pkg/pool"
+	"github.com/0ceanslim/anchor/pkg/tx"
 	"github.com/spf13/cobra"
 	"github.com/vulpemventures/go-elements/network"
 	"github.com/vulpemventures/go-elements/transaction"
@@ -238,6 +240,97 @@ func poolJSONName(asset0, asset1 string, feeNum, feeDen uint64) string {
 		bps = (feeDen - feeNum) * 10000 / feeDen
 	}
 	return fmt.Sprintf("pool-%s-%s-%dbps.json", a0, a1, bps)
+}
+
+// resolvePoolID looks up a pool by its LP asset / pool ID, compiles contracts,
+// saves to pools/, and returns the saved config path. If a matching config
+// already exists in pools/, returns that path without recompiling.
+func resolvePoolID(poolID, esploraURL, buildDir, netName string) (string, error) {
+	// Check if we already have a saved config with this LP asset ID.
+	candidates, _ := filepath.Glob(filepath.Join("pools", "*.json"))
+	if _, err := os.Stat("pool.json"); err == nil {
+		candidates = append(candidates, "pool.json")
+	}
+	for _, path := range candidates {
+		cfg, err := pool.Load(path)
+		if err != nil {
+			continue
+		}
+		if strings.EqualFold(cfg.LPAssetID, poolID) {
+			fmt.Fprintf(os.Stderr, "Found saved config for pool %s: %s\n", poolID[:16]+"...", path)
+			return path, nil
+		}
+	}
+
+	// Not saved — look up via Esplora, compile, and save.
+	netName = resolveNetwork(netName)
+	net, err := parseNetwork(netName)
+	if err != nil {
+		return "", err
+	}
+	p, err := lookupPoolByID(resolveEsplora(esploraURL), poolID, buildDir, net)
+	if err != nil {
+		return "", err
+	}
+	return savePoolFromDiscovered(p, buildDir, net)
+}
+
+// savePoolFromDiscovered compiles contracts for a discovered pool and saves the
+// config to pools/. Returns the saved file path.
+func savePoolFromDiscovered(p *discoveredPool, buildDir string, net *network.Network) (string, error) {
+	lpAssetID, err := tx.ComputeLPAssetID(p.creationVinTx, p.creationVinV)
+	if err != nil {
+		return "", fmt.Errorf("compute LP asset ID: %w", err)
+	}
+	feeDiff := uint64(p.feeDen) - uint64(p.feeNum)
+	patchMap := map[string]compiler.ArgsParam{
+		"ASSET0":     {Value: normalizeHex(p.asset0), Type: "u256"},
+		"ASSET1":     {Value: normalizeHex(p.asset1), Type: "u256"},
+		"FEE_NUM":    {Value: fmt.Sprintf("%d", p.feeNum), Type: "u64"},
+		"FEE_DEN":    {Value: fmt.Sprintf("%d", p.feeDen), Type: "u64"},
+		"FEE_DIFF":   {Value: fmt.Sprintf("%d", feeDiff), Type: "u64"},
+		"LP_PREMINT": {Value: fmt.Sprintf("%d", pool.LPPremint), Type: "u64"},
+	}
+	if err := compiler.PatchParams(buildDir, patchMap); err != nil {
+		return "", fmt.Errorf("patch params: %w", err)
+	}
+	for _, shlName := range []string{
+		"pool_a_swap.shl", "pool_a_remove.shl",
+		"pool_b_swap.shl", "pool_b_remove.shl",
+		"lp_reserve_add.shl", "lp_reserve_remove.shl",
+	} {
+		shlPath := buildDir + "/" + shlName
+		if err := compiler.PatchLPAssetID(shlPath, shlPath, lpAssetID); err != nil {
+			return "", fmt.Errorf("patch LP asset ID in %s: %w", shlName, err)
+		}
+	}
+
+	fmt.Fprintf(os.Stderr, "Compiling contracts...\n")
+	cfg, err := compiler.CompileAll(buildDir, net)
+	if err != nil {
+		return "", fmt.Errorf("compile: %w", err)
+	}
+
+	cfg.Asset0 = p.asset0
+	cfg.Asset1 = p.asset1
+	cfg.LPAssetID = p.lpAsset
+	cfg.FeeNum = uint64(p.feeNum)
+	cfg.FeeDen = uint64(p.feeDen)
+
+	if err := ensurePoolsDir(); err != nil {
+		return "", fmt.Errorf("create pools/: %w", err)
+	}
+	outFile := poolsSavePath(p.asset0, p.asset1, uint64(p.feeNum), uint64(p.feeDen))
+
+	if err := cfg.Save(outFile); err != nil {
+		return "", fmt.Errorf("save pool config: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "Saved pool config to %s\n", outFile)
+	fmt.Fprintf(os.Stderr, "  pool_a: %s\n", cfg.PoolA.Address)
+	fmt.Fprintf(os.Stderr, "  pool_b: %s\n", cfg.PoolB.Address)
+	fmt.Fprintf(os.Stderr, "  lp_reserve: %s\n", cfg.LpReserve.Address)
+	fmt.Fprintf(os.Stderr, "  lp_asset: %s\n", p.lpAsset)
+	return outFile, nil
 }
 
 // revBytes returns a reversed copy of b.

@@ -192,6 +192,28 @@ func (c *Client) GetBlockTxs(blockHash string, startIndex int) ([]Tx, error) {
 	return txs, nil
 }
 
+// AssetInfo holds Elements asset metadata from the Esplora API.
+type AssetInfo struct {
+	AssetID      string          `json:"asset_id"`
+	IssuanceTxIn *AssetIssuance  `json:"issuance_txin"`
+	Status       TxStatus        `json:"status"`
+}
+
+// AssetIssuance identifies the issuance input for an asset.
+type AssetIssuance struct {
+	TxID string `json:"txid"`
+	Vin  int    `json:"vin"`
+}
+
+// GetAsset fetches asset metadata by asset ID, including the issuance transaction.
+func (c *Client) GetAsset(assetID string) (*AssetInfo, error) {
+	var info AssetInfo
+	if err := c.get("/api/asset/"+assetID, &info); err != nil {
+		return nil, err
+	}
+	return &info, nil
+}
+
 // Ping checks connectivity by fetching the chain tip height.
 // Returns the current block height or an error.
 func (c *Client) Ping() (int, error) {

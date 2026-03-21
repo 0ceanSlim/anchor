@@ -20,6 +20,7 @@ func cmdRemoveLiquidity() *cobra.Command {
 		asset0, asset1, lbtcAsset, lpAssetID, netName     string
 		walletName                                        string
 		broadcast                                         bool
+		poolID, esploraURL, buildDir                      string
 	)
 	cmd := &cobra.Command{
 		Use:   "remove-liquidity",
@@ -27,6 +28,15 @@ func cmdRemoveLiquidity() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			rpcURL, rpcUser, rpcPass = resolveRPC(rpcURL, rpcUser, rpcPass)
 			netName = resolveNetwork(netName)
+
+			if poolID != "" {
+				resolved, err := resolvePoolID(poolID, esploraURL, buildDir, netName)
+				if err != nil {
+					return err
+				}
+				poolFile = resolved
+			}
+
 			resolved, err := resolvePoolFile(cmd, poolFile)
 			if err != nil {
 				return err
@@ -370,5 +380,8 @@ func cmdRemoveLiquidity() *cobra.Command {
 	cmd.Flags().StringVar(&rpcPass, "rpc-pass", "", "RPC password (env: ANCHOR_RPC_PASS)")
 	cmd.Flags().BoolVar(&broadcast, "broadcast", false, "Broadcast transaction via RPC")
 	cmd.Flags().StringVar(&netName, "network", "", "Network: liquid, testnet, regtest (env: ANCHOR_NETWORK)")
+	cmd.Flags().StringVar(&poolID, "pool-id", "", "Resolve pool by LP asset / pool ID (via Esplora)")
+	cmd.Flags().StringVar(&esploraURL, "esplora-url", "", "Esplora API URL (env: ANCHOR_ESPLORA_URL)")
+	cmd.Flags().StringVar(&buildDir, "build-dir", "./build", "Directory containing .shl and .args files")
 	return cmd
 }

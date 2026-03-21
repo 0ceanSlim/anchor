@@ -131,14 +131,10 @@ func SwapOutput(amountIn, reserveIn, reserveOut, feeNum, feeDen uint64) uint64 {
 }
 
 // LPMintedForDeposit computes LP tokens to mint for add-liquidity.
-func LPMintedForDeposit(deposit0, deposit1, reserve0, reserve1, totalSupply uint64) uint64 {
-	// lp = floor(min(deposit0 * supply / reserve0, deposit1 * supply / reserve1))
-	lp0 := deposit0 * totalSupply / reserve0
-	lp1 := deposit1 * totalSupply / reserve1
-	if lp0 < lp1 {
-		return lp0
-	}
-	return lp1
+// The lp_reserve_add contract validates: lp_minted == floor(deposit0 * supply / reserve0).
+// deposit1 is validated separately by the contract's proportionality check.
+func LPMintedForDeposit(deposit0, _, reserve0, _, totalSupply uint64) uint64 {
+	return deposit0 * totalSupply / reserve0
 }
 
 // RemovePayouts computes proportional payouts for remove-liquidity.

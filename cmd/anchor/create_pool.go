@@ -36,6 +36,7 @@ func cmdCreatePool() *cobra.Command {
 		noAnnounce, force                  bool
 		startBlock                         int
 		esploraURL                         string
+		poolID                             string
 	)
 	cmd := &cobra.Command{
 		Use:   "create-pool",
@@ -60,6 +61,18 @@ func cmdCreatePool() *cobra.Command {
 			}
 
 			const createPoolVbytes uint64 = 1600
+
+			// --pool-id: look up existing pool — if found, suggest add-liquidity instead.
+			if poolID != "" && !force {
+				p, lookupErr := lookupPoolByID(esploraURL, poolID, buildDir, net)
+				if lookupErr == nil && !p.closed {
+					fmt.Fprintf(os.Stderr, "Pool already exists for ID %s\n", poolID)
+					fmt.Fprintf(os.Stderr, "  Reserve0: %d  Reserve1: %d\n", p.reserve0, p.reserve1)
+					fmt.Fprintf(os.Stderr, "  Pool A:   %s\n", p.poolAAddr)
+					fmt.Fprintf(os.Stderr, "\nUse 'anchor add-liquidity --pool-id %s' to add liquidity.\n", poolID)
+					return nil
+				}
+			}
 
 			// ── Wizard: prompt for any missing required values ──────────────────
 			wizardNeeded := asset0 == "" || asset1 == "" || deposit0 == 0 || deposit1 == 0
@@ -565,5 +578,6 @@ func cmdCreatePool() *cobra.Command {
 	cmd.Flags().IntVar(&startBlock, "start-block", 0, "Block height to start pool discovery scan from")
 	cmd.Flags().StringVar(&esploraURL, "esplora-url", "", "Esplora API URL for pool discovery (env: ANCHOR_ESPLORA_URL)")
 	cmd.Flags().StringVar(&netName, "network", "", "Network: liquid, testnet, regtest (env: ANCHOR_NETWORK)")
+	cmd.Flags().StringVar(&poolID, "pool-id", "", "Check if a pool already exists by LP asset / pool ID")
 	return cmd
 }
