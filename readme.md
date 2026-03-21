@@ -20,6 +20,9 @@ This repository is public so the protocol and implementation can receive review.
 
 # Documentation
 
+- **CLI reference** — all commands and flags
+  [docs/cli.md](docs/cli.md)
+
 - **Protocol specification**
   [docs/spec.md](docs/spec.md)
 
@@ -77,102 +80,48 @@ bin/anchor
 
 # CLI Usage
 
-Wizard-style flows are currently being implemented, but **all commands below work today using flags**.
+All commands support interactive **wizard mode** — run without flags and the CLI will prompt for everything it needs. Every command also works fully non-interactively via flags.
 
----
-
-## Check environment
-
-Validate RPC connectivity and tool availability before doing anything:
+Set up your environment once:
 
 ```bash
-./anchor check
+export ANCHOR_RPC_URL=http://localhost:7041
+export ANCHOR_RPC_USER=user
+export ANCHOR_RPC_PASS=pass
+export ANCHOR_NETWORK=testnet
+export ANCHOR_ESPLORA_URL=http://localhost:3000
 ```
 
----
+### Commands
 
-## Query pool state
+| Command | Description |
+|---------|-------------|
+| `check` | Validate RPC, Esplora, compiler, and pool config |
+| `compile` | Compile Simplicity contracts (developer tool) |
+| `find-pools` | Discover pools by asset pair or pool ID |
+| `pool-info` | Query live pool reserves and price |
+| `create-pool` | Deploy a new AMM pool |
+| `swap` | Swap between pool assets |
+| `add-liquidity` | Deposit assets and receive LP tokens |
+| `remove-liquidity` | Burn LP tokens and withdraw reserves |
+
+### Quick Examples
 
 ```bash
-./anchor pool-info
+# Find a pool by its LP asset ID
+./anchor find-pools --pool-id <lp-asset-hex>
+
+# Query pool reserves
+./anchor pool-info --pool-id <lp-asset-hex>
+
+# Interactive swap (prompts for everything)
+./anchor swap
+
+# Non-interactive swap
+./anchor swap --pool-id <lp-asset-hex> --in-asset asset0 --amount 10000 --broadcast
 ```
 
-Prints current reserves, LP supply, and implied price from chain. This requires a pool.json currently. Pool discovery and info by lp-asset flag is planned. You can use the example in this repo which is a live pool on testnet right now.
-
-```bash
-./anchor pool-info --pool pool.example.json
-```
-
----
-
-## Swap
-
-```bash
-./anchor swap \
-  --amount-in <satoshis> \
-  --asset-in <asset-id-hex> \
-  --user-utxo <txid:vout> \
-  --user-addr <your-address> \
-  [--broadcast]
-```
-
-Without `--broadcast` the signed transaction hex is printed but not sent.
-
----
-
-## Add liquidity
-
-```bash
-./anchor add-liquidity \
-  --deposit0 <satoshis> \
-  --deposit1 <satoshis> \
-  --user-addr <your-address> \
-  [--broadcast]
-```
-
-Deposits Asset0 and Asset1 proportionally and mints LP tokens to `--user-addr`.
-
----
-
-## Remove liquidity
-
-```bash
-./anchor remove-liquidity \
-  --lp-amount <lp-tokens-to-burn> \
-  --lp-utxo <txid:vout> \
-  --user-addr0 <address-for-asset0-payout> \
-  --user-addr1 <address-for-asset1-payout> \
-  [--broadcast]
-```
-
-Burns LP tokens and returns proportional Asset0 and Asset1 to the specified addresses.
-
----
-
-# Pool Deployment (Advanced)
-
-Each pool is an independent deployment with its own asset IDs, fee rate, and LP token issuance.
-
-Basic workflow:
-
-1. Pick **Asset0** and **Asset1** (any two Liquid assets).
-2. Choose a **fee rate**.
-3. Compile contracts:
-
-```
-./anchor compile
-```
-
-4. Create the pool:
-
-```
-./anchor create-pool ...
-```
-
-The LP asset ID is deterministically derived from the pool creation input outpoint before the transaction is signed, allowing it to be embedded in the contracts before deployment.
-
-Full protocol details are documented in
-[docs/spec.md](docs/spec.md).
+Full flag reference: **[docs/cli.md](docs/cli.md)**
 
 ---
 
