@@ -4,18 +4,20 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/0ceanslim/anchor/pkg/esplora"
 	"github.com/0ceanslim/anchor/pkg/pool"
 	"github.com/0ceanslim/anchor/pkg/rpc"
 	"github.com/spf13/cobra"
 )
 
 func cmdCheck() *cobra.Command {
-	var poolFile, rpcURL, rpcUser, rpcPass string
+	var poolFile, rpcURL, rpcUser, rpcPass, esploraURL string
 	cmd := &cobra.Command{
 		Use:   "check",
 		Short: "Validate environment: RPC connection, simc binary, and pool.json",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			rpcURL, rpcUser, rpcPass = resolveRPC(rpcURL, rpcUser, rpcPass)
+			esploraURL = resolveEsplora(esploraURL)
 
 			ok := true
 			check := func(label, value, hint string) {
@@ -44,6 +46,19 @@ func cmdCheck() *cobra.Command {
 				}
 			} else {
 				fmt.Println("  SKIP     (no RPC URL)")
+			}
+
+			fmt.Println("\nEsplora:")
+			if esploraURL != "" {
+				ec := esplora.New(esploraURL)
+				if height, err := ec.Ping(); err != nil {
+					fmt.Printf("  WARN     %s — %v\n", esploraURL, err)
+					fmt.Println("           (pool discovery will be unavailable; flag-mode with pool.json still works)")
+				} else {
+					fmt.Printf("  OK       %s (tip: %d)\n", esploraURL, height)
+				}
+			} else {
+				fmt.Println("  SKIP     ANCHOR_ESPLORA_URL not set (pool discovery unavailable)")
 			}
 
 			fmt.Println("\npool.json:")
@@ -78,5 +93,6 @@ func cmdCheck() *cobra.Command {
 	cmd.Flags().StringVar(&rpcURL, "rpc-url", "", "Elements RPC URL (env: ANCHOR_RPC_URL)")
 	cmd.Flags().StringVar(&rpcUser, "rpc-user", "", "RPC username (env: ANCHOR_RPC_USER)")
 	cmd.Flags().StringVar(&rpcPass, "rpc-pass", "", "RPC password (env: ANCHOR_RPC_PASS)")
+	cmd.Flags().StringVar(&esploraURL, "esplora-url", "", "Esplora API URL (env: ANCHOR_ESPLORA_URL)")
 	return cmd
 }

@@ -50,6 +50,15 @@ func resolveRPC(url, user, pass string) (string, string, string) {
 	return url, user, pass
 }
 
+func resolveEsplora(url string) string {
+	if url == "" {
+		if v := os.Getenv("ANCHOR_ESPLORA_URL"); v != "" {
+			url = v
+		}
+	}
+	return url
+}
+
 func resolveNetwork(name string) string {
 	if name == "" {
 		if v := os.Getenv("ANCHOR_NETWORK"); v != "" {

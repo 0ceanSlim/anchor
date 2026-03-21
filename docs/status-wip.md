@@ -37,37 +37,107 @@ discovery, mempool awareness, and address-based UTXO lookups.
 
 **API docs:** https://github.com/Blockstream/esplora/blob/master/API.md
 
-### 1.1 `pkg/esplora/client.go`
+### 1.1 `pkg/esplora/client.go` — DONE
 
 Minimal typed client for the Esplora HTTP API. Only the endpoints we need:
 
-| Endpoint | Used by |
-|----------|---------|
-| `GET /api/blocks/:start_height` | Pool discovery (block scanning) |
-| `GET /api/block/:hash/txs/:start_index` | Pool discovery (tx scanning) |
-| `GET /api/tx/:txid` | Creation tx decode, LP asset derivation |
-| `GET /api/address/:addr/utxo` | Pool state queries, UTXO lookups |
-| `GET /api/address/:addr/txs` | Pool tx history |
-| `GET /api/address/:addr/txs/mempool` | Mempool awareness (Phase 4) |
+| Endpoint | Used by | Status |
+|----------|---------|--------|
+| `GET /api/blocks/tip/height` | Connectivity check (Ping) | done |
+| `GET /api/blocks/:start_height` | Pool discovery (block scanning) | done |
+| `GET /api/block/:hash/txs/:start_index` | Pool discovery (tx scanning) | done |
+| `GET /api/tx/:txid` | Creation tx decode, LP asset derivation | done |
+| `GET /api/address/:addr/utxo` | Pool state queries, UTXO lookups | done |
+| `GET /api/address/:addr/txs` | Pool tx history | done |
+| `GET /api/address/:addr/txs/mempool` | Mempool awareness (Phase 4) | done |
 
 Configuration: `ANCHOR_ESPLORA_URL` env var, `--esplora-url` flag. No auth needed.
+Added to `.env.example` and `.env.ps1.example`.
 
-### 1.2 `anchor find-pools` Rewrite
+**Files:**
+- `pkg/esplora/client.go` — Client, types, all 7 endpoints
+- `pkg/esplora/scan.go` — `ScanPoolCreations` (Esplora-backed ANCHR OP_RETURN scanner)
+- `tests/esplora_test.go` — all integration tests (Ping, UTXOs, Tx, AddressTxs, Blocks, ScanPoolCreations)
 
-Replace the current `ScanPoolCreations` (block-by-block RPC scan) with Esplora-backed
-discovery. The Esplora block/tx endpoints are indexed and much faster.
+### 1.2 `anchor find-pools` Rewrite — DONE
+
+Replaced the RPC-only scan with Esplora-backed discovery. Falls back to the old RPC
+block-by-block scan with a warning if `ANCHOR_ESPLORA_URL` is not set.
+
+Uses Esplora block/tx endpoints for OP_RETURN scanning, then `GetTx` for creation tx
+decode (pool addresses + LP asset derivation), then `GetAddressUTXOs` for live reserves.
 
 **Output:** List of discovered pools sorted by depth (reserve0 * reserve1), showing:
-pool_a address, fee rate, reserves, LP asset ID, creation block height.
+pool_a address, fee rate, reserves, LP asset ID. Closed pools marked `[closed]`.
 
-**Key addition:** `anchor find-pools --save <file>` writes a full pool.json for a
-selected pool — complete with addresses, CMRs, binaries, control blocks. This requires
-recompiling the contracts with the discovered pool's LP_ASSET_ID.
+New flags: `--esplora-url`.
 
-### 1.3 `anchor check` Update
+**TODO:** `anchor find-pools --save <file>` — writes a full pool.json for a selected
+pool, complete with addresses, CMRs, binaries, control blocks. This requires recompiling
+the contracts with the discovered pool's LP_ASSET_ID. Not yet implemented.
 
-Add Esplora connectivity check alongside the existing RPC check. Warn (don't fail) if
-Esplora is unreachable — flag-mode operations with pool.json still work via RPC alone.
+### 1.3 `anchor check` Update — DONE
+
+Added Esplora connectivity check: shows `OK` with chain tip height, or `WARN` if
+unreachable. Does not fail the check — flag-mode operations with pool.json still work
+via RPC alone. New flag: `--esplora-url`.
+
+### Testing
+
+All Esplora tests require a running Esplora instance. Set `ANCHOR_ESPLORA_URL` to run:
+
+```bash
+# Run esplora integration tests (centralized in tests/)
+ANCHOR_ESPLORA_URL="http://127.0.0.1:5000" go test -tags integration -v ./tests/ -run TestEsplora -timeout 120s
+
+# Smoke-test find-pools (scan from a recent block to keep it fast)
+ANCHOR_ESPLORA_URL="http://127.0.0.1:5000" anchor find-pools --start-block 2354480
+
+# Smoke-test check
+ANCHOR_ESPLORA_URL="http://127.0.0.1:5000" anchor check
+```
+
+Verify:
+- [ ] `go test -tags integration ./tests/ -run TestEsplora` — all 7 tests pass
+- [ ] `find-pools` prints "Scanning via Esplora" and finds pools with correct reserves
+- [ ] `find-pools` without `ANCHOR_ESPLORA_URL` prints RPC fallback warning
+- [ ] `check` shows Esplora OK with tip height
+- [ ] `check` without `ANCHOR_ESPLORA_URL` shows SKIP (not an error)
+
+### 1.4 `find-pools --save` — DONE
+
+Recompiles contracts with a discovered pool's LP_ASSET_ID and writes a full pool.json:
+
+1. Scans chain for ANCHR OP_RETURN pool announcements
+2. Verifies each pool's compatibility by compiling contracts and checking pool_a address
+   matches on-chain (pools created with older contract versions are filtered out)
+3. Displays compatible pools sorted by depth with index numbers
+4. Prompts for pool selection (or `--index N` for non-interactive use)
+5. Recompiles all contracts with the selected pool's parameters + LP_ASSET_ID
+6. Writes pool.json with addresses, CMRs, binaries, control blocks, and metadata
+
+**Flags:** `--save`, `--out <file>`, `--index <N>`, `--build-dir <dir>`
+
+The saved pool.json enables flag-mode swap/add/remove against any discovered pool,
+even without having created it yourself. Only `--pool <file>` and RPC env vars needed.
+
+**simc type format update:** The newer simc binary requires `u256`/`u64`/`u32` types
+in .args files instead of the old `(Word256)`/`(Word16)`/`(Word64)` format. All .args
+files and Go code updated to use the new format.
+
+### 1.5 `create-pool` Duplicate Check — Known Limitation
+
+The `create-pool` wizard's duplicate pool detection compiles contracts and scans the
+derived pool_a address for existing UTXOs. This is effectively a no-op because:
+- The LP_ASSET_ID is baked into the contract CMRs → different taproot addresses
+- LP_ASSET_ID is derived from the creation UTXO outpoint, which doesn't exist yet
+- So it compiles with a placeholder LP_ASSET_ID and scans an address no real pool has
+
+The `--force` flag skips this check entirely. When using `--force`, all required flags
+must be provided (no wizard prompts): `--asset0`, `--asset1`, `--deposit0`, `--deposit1`,
+plus the usual RPC and UTXO flags.
+
+**Future fix:** Replace compile-and-scan with Esplora-backed `find-pools` pool discovery.
 
 ---
 
@@ -76,29 +146,18 @@ Esplora is unreachable — flag-mode operations with pool.json still work via RP
 With Esplora and find-pools working, integrate pool discovery into all wizards. This is
 the blocker that prevents wizards from working without pool.json.
 
-### 2.1 Pool Discovery Function
+### 2.1 Fix `create-pool` Wizard Duplicate Detection
 
-**`pkg/pool/discover.go`:**
-- `DiscoverPools(esploraClient, asset0, asset1)` — scan ANCHR OP_RETURNs, filter by
-  asset pair, derive LP asset IDs and addresses from creation txs, query live reserves
-- Returns `[]DiscoveredPool` sorted by depth (deepest first)
-- Each `DiscoveredPool` contains everything needed to build a full `pool.Config`:
-  asset0, asset1, feeNum, feeDen, LP asset ID, creation txid, pool addresses, reserves
+Replace the broken compile-and-scan approach with Esplora pool discovery. If pools found
+for the selected asset pair + fee, show them sorted by depth and offer "Add liquidity
+instead?" redirect.
 
-### 2.2 Fix `create-pool` Wizard
-
-**Currently broken:** Duplicate pool detection compiles contracts and scans the derived
-address, but this only finds pools whose LP_ASSET_ID matches the stale `.args` file.
-
-**Fix:** Replace compile-and-scan with `DiscoverPools`. If pools found for the selected
-asset pair + fee, show them sorted by depth and offer "Add liquidity instead?" redirect.
-
-### 2.3 Fix `add-liquidity` Wizard
+### 2.2 Fix `add-liquidity` Wizard
 
 **Currently broken:** Same compile-and-scan issue. Finds the wrong pool or no pool.
 
-**Fix:** Replace compile-and-scan with `DiscoverPools`. Select deepest pool by default.
-Then recompile contracts with the discovered LP_ASSET_ID to get the correct CMRs,
+**Fix:** Replace compile-and-scan with Esplora pool discovery. Select deepest pool by
+default. Recompile contracts with the discovered LP_ASSET_ID to get the correct CMRs,
 binaries, and control blocks for tx building.
 
 ### 2.4 `swap` Wizard — NEW
