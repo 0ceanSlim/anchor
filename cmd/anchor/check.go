@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/0ceanslim/anchor/pkg/esplora"
 	"github.com/0ceanslim/anchor/pkg/pool"
@@ -61,14 +62,23 @@ func cmdCheck() *cobra.Command {
 				fmt.Println("  SKIP     ANCHOR_ESPLORA_URL not set (pool discovery unavailable)")
 			}
 
-			fmt.Println("\npool.json:")
-			if _, err := os.Stat(poolFile); os.IsNotExist(err) {
-				fmt.Printf("  MISSING  %s — run 'anchor compile' first\n", poolFile)
-				ok = false
+			fmt.Println("\nPool config:")
+			resolved, resolveErr := resolvePoolFile(cmd, poolFile)
+			if resolveErr != nil {
+				fmt.Printf("  WARN     %v\n", resolveErr)
+			}
+			if resolved == "" {
+				// Check pools/ directory status.
+				poolsEntries, _ := filepath.Glob(filepath.Join("pools", "*.json"))
+				if len(poolsEntries) == 0 {
+					fmt.Println("  MISSING  no pool config found (pools/ empty or missing, no pool.json)")
+					fmt.Println("           run 'anchor create-pool' or 'anchor find-pools --save'")
+					ok = false
+				}
 			} else {
-				fmt.Printf("  OK       %s\n", poolFile)
-				if cfg, err := pool.Load(poolFile); err != nil {
-					fmt.Printf("  INVALID  %s — %v\n", poolFile, err)
+				fmt.Printf("  OK       %s\n", resolved)
+				if cfg, loadErr := pool.Load(resolved); loadErr != nil {
+					fmt.Printf("  INVALID  %s — %v\n", resolved, loadErr)
 					ok = false
 				} else {
 					if cfg.Asset0 != "" {
@@ -80,6 +90,11 @@ func cmdCheck() *cobra.Command {
 						fmt.Printf("  OK       lp_asset_id = %s\n", cfg.LPAssetID)
 					}
 				}
+			}
+			// Show pools/ directory summary.
+			poolsEntries, _ := filepath.Glob(filepath.Join("pools", "*.json"))
+			if len(poolsEntries) > 0 {
+				fmt.Printf("  INFO     pools/ contains %d config(s)\n", len(poolsEntries))
 			}
 
 			if !ok {

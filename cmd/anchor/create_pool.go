@@ -35,12 +35,14 @@ func cmdCreatePool() *cobra.Command {
 		feeNum, feeDen                     uint64
 		noAnnounce, force                  bool
 		startBlock                         int
+		esploraURL                         string
 	)
 	cmd := &cobra.Command{
 		Use:   "create-pool",
 		Short: "Compile, fund, build, and broadcast a new AMM pool",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			rpcURL, rpcUser, rpcPass = resolveRPC(rpcURL, rpcUser, rpcPass)
+			esploraURL = resolveEsplora(esploraURL)
 			netName = resolveNetwork(netName)
 			net, err := parseNetwork(netName)
 			if err != nil {
@@ -143,91 +145,104 @@ func cmdCreatePool() *cobra.Command {
 					fmt.Fprintf(os.Stderr, "Pool fee: %d/%d (%.2f%%)\n", feeNum, feeDen, pct)
 				}
 
-				// ── Early pool duplicate detection ──────────────────────────────────────
-				// Compiles with the selected assets and fee params to derive the pool_a
-				// address, then does a single ScanAddress RPC to check for live UTXOs.
-				// This is O(1) RPCs and runs in < 1 second.
+				// ── Pool discovery ────────────────────────────────────────────────────
+				// Scan chain for existing pools with this asset pair.
+				// If found → show them and offer add-liquidity redirect.
+				// If not found → proceed to create.
+				// --force skips discovery entirely.
 				if !force {
-					fmt.Fprintf(os.Stderr, "Checking for existing pool...\n")
-					earlyPatch := map[string]compiler.ArgsParam{
-						"ASSET0":   {Value: normalizeHex(asset0), Type: "u256"},
-						"ASSET1":   {Value: normalizeHex(asset1), Type: "u256"},
-						"FEE_NUM":  {Value: fmt.Sprintf("%d", feeNum), Type: "u64"},
-						"FEE_DEN":  {Value: fmt.Sprintf("%d", feeDen), Type: "u64"},
-						"FEE_DIFF": {Value: fmt.Sprintf("%d", feeDen-feeNum), Type: "u64"},
+					if !cmd.Flags().Changed("start-block") {
+						startBlock = int(promptUint64("Start block for pool discovery [default: 2300000]: ", 2300000))
 					}
-					if err := compiler.PatchParams(buildDir, earlyPatch); err != nil {
-						return fmt.Errorf("patch params: %w", err)
-					}
-					earlyCfg, earlyErr := compiler.CompileAll(buildDir, net)
-					if earlyErr != nil {
-						return fmt.Errorf("compile: %w", earlyErr)
-					}
-					fmt.Fprintf(os.Stderr, "  Scanning: %s\n", earlyCfg.PoolA.Address)
-				existUTXOs, scanErr := nodeClient.ScanAddress(earlyCfg.PoolA.Address)
-					if scanErr != nil {
-						fmt.Fprintf(os.Stderr, "warn: pool check failed: %v\n", scanErr)
-					} else if len(existUTXOs) == 0 {
-					// Secondary: pool.json may store the real on-chain address when contracts
-					// changed since the pool was created (different CMR → different address).
-					if savedCfg, loadErr := pool.Load(poolFile); loadErr == nil &&
-						strings.EqualFold(savedCfg.Asset0, asset0) &&
-						strings.EqualFold(savedCfg.Asset1, asset1) &&
-						savedCfg.FeeNum == feeNum && savedCfg.FeeDen == feeDen &&
-						savedCfg.PoolA.Address != "" &&
-						savedCfg.PoolA.Address != earlyCfg.PoolA.Address {
-						if altUTXOs, altErr := nodeClient.ScanAddress(savedCfg.PoolA.Address); altErr == nil && len(altUTXOs) > 0 {
-							existUTXOs = altUTXOs
-							earlyCfg = savedCfg
-						}
-					}
-				}
-				if len(existUTXOs) > 0 {
-						var existReserve0, existReserve1 uint64
-						for _, u := range existUTXOs {
-							if strings.EqualFold(u.Asset, asset0) {
-								existReserve0 += satoshis(u.Amount)
-							}
-						}
-						poolBUTXOs, _ := nodeClient.ScanAddress(earlyCfg.PoolB.Address)
-						for _, u := range poolBUTXOs {
-							if strings.EqualFold(u.Asset, asset1) {
-								existReserve1 += satoshis(u.Amount)
-							}
-						}
-						fmt.Fprintf(os.Stderr, "\nA pool with these parameters already exists.\n")
-						fmt.Fprintf(os.Stderr, "  pool_a:   %s\n", earlyCfg.PoolA.Address)
-						fmt.Fprintf(os.Stderr, "  reserve0: %d sats\n", existReserve0)
-						fmt.Fprintf(os.Stderr, "  reserve1: %d sats\n", existReserve1)
-						if strings.ToLower(promptString("Add liquidity to this pool instead? [y/n]: ")) != "y" {
-							fmt.Fprintf(os.Stderr, "\nTo create a new pool with these parameters anyway:\n")
-							fmt.Fprintf(os.Stderr, "  anchor create-pool --force --asset0 %s --asset1 %s\n", asset0, asset1)
-							return nil
-						}
 
-						// Get LP asset ID: try pool.json, then walk back from pool UTXO creating tx.
-						lpAsset := ""
-						if existPool, loadErr := pool.Load(poolFile); loadErr == nil {
-							lpAsset = existPool.LPAssetID
-						}
-						if lpAsset == "" && len(existUTXOs) > 0 {
-							fmt.Fprintf(os.Stderr, "Resolving LP asset ID from pool chain...\n")
-							if resolved, resolveErr := resolveLPAsset(nodeClient, existUTXOs[0].TxID); resolveErr == nil {
-								lpAsset = resolved
-							} else {
-								fmt.Fprintf(os.Stderr, "Walk-back failed: %v\n", resolveErr)
-							}
-						}
-						earlyCfg.Asset0 = asset0
-						earlyCfg.Asset1 = asset1
-						earlyCfg.LPAssetID = lpAsset
-						return runAddLiquidityWizard(earlyCfg, walletClient, nodeClient, lbtcAsset, balances, broadcast)
+					discovered, discErr := discoverPools(esploraURL, nodeClient, asset0, asset1, startBlock, buildDir, net)
+					if discErr != nil {
+						fmt.Fprintf(os.Stderr, "warn: pool discovery failed: %v\n", discErr)
 					}
-				}
 
-				// If no existing pool was found above, inform the user before continuing.
-				fmt.Fprintf(os.Stderr, "No existing pool found for this asset pair and fee tier. Proceeding to create.\n")
-				fmt.Fprintf(os.Stderr, "  (use --force to skip this check, or Ctrl+C to abort)\n")
+					// Filter to open pools only.
+					var matching []discoveredPool
+					for _, p := range discovered {
+						if !p.closed {
+							matching = append(matching, p)
+						}
+					}
+
+					if len(matching) > 0 {
+						fmt.Fprintf(os.Stderr, "\nExisting pool(s) found for this asset pair:\n")
+						for i, p := range matching {
+							addr := p.poolAAddr
+							if len(addr) > 20 {
+								addr = addr[:8] + "..." + addr[len(addr)-8:]
+							}
+							feeStr := fmt.Sprintf("%.2f%%", float64(p.feeDen-p.feeNum)/float64(p.feeDen)*100)
+							fmt.Fprintf(os.Stderr, "  [%d] %s  fee: %s  reserve0: %d  reserve1: %d\n",
+								i, addr, feeStr, p.reserve0, p.reserve1)
+						}
+						if strings.ToLower(promptString("Add liquidity to an existing pool instead? [y/n]: ")) == "y" {
+							// Use deepest pool (first in sorted list).
+							sel := matching[0]
+							if len(matching) > 1 {
+								var opts []string
+								for _, p := range matching {
+									addr := p.poolAAddr
+									if len(addr) > 20 {
+										addr = addr[:8] + "..." + addr[len(addr)-8:]
+									}
+									feeStr := fmt.Sprintf("%.2f%%", float64(p.feeDen-p.feeNum)/float64(p.feeDen)*100)
+									opts = append(opts, fmt.Sprintf("%s  fee: %s  reserve0: %d  reserve1: %d", addr, feeStr, p.reserve0, p.reserve1))
+								}
+								idx := promptChoice("Select pool", opts)
+								sel = matching[idx]
+							}
+
+							// Recompile contracts with the selected pool's LP_ASSET_ID.
+							selFeeNum := uint64(sel.feeNum)
+							selFeeDen := uint64(sel.feeDen)
+							selFeeDiff := selFeeDen - selFeeNum
+							lpAssetID, lpErr := tx.ComputeLPAssetID(sel.creationVinTx, sel.creationVinV)
+							if lpErr != nil {
+								fmt.Fprintf(os.Stderr, "warn: could not recompute LP asset: %v\n", lpErr)
+							}
+							patchMap := map[string]compiler.ArgsParam{
+								"ASSET0":     {Value: normalizeHex(asset0), Type: "u256"},
+								"ASSET1":     {Value: normalizeHex(asset1), Type: "u256"},
+								"FEE_NUM":    {Value: fmt.Sprintf("%d", selFeeNum), Type: "u64"},
+								"FEE_DEN":    {Value: fmt.Sprintf("%d", selFeeDen), Type: "u64"},
+								"FEE_DIFF":   {Value: fmt.Sprintf("%d", selFeeDiff), Type: "u64"},
+								"LP_PREMINT": {Value: fmt.Sprintf("%d", pool.LPPremint), Type: "u64"},
+							}
+							if err := compiler.PatchParams(buildDir, patchMap); err != nil {
+								return fmt.Errorf("patch params: %w", err)
+							}
+							if lpErr == nil {
+								for _, shlName := range []string{
+									"pool_a_swap.shl", "pool_a_remove.shl",
+									"pool_b_swap.shl", "pool_b_remove.shl",
+									"lp_reserve_add.shl", "lp_reserve_remove.shl",
+								} {
+									shlPath := buildDir + "/" + shlName
+									_ = compiler.PatchLPAssetID(shlPath, shlPath, lpAssetID)
+								}
+							}
+							fmt.Fprintf(os.Stderr, "Compiling contracts for selected pool...\n")
+							addCfg, compileErr := compiler.CompileAll(buildDir, net)
+							if compileErr != nil {
+								return fmt.Errorf("compile: %w", compileErr)
+							}
+							addCfg.Asset0 = asset0
+							addCfg.Asset1 = asset1
+							addCfg.LPAssetID = sel.lpAsset
+							addCfg.FeeNum = selFeeNum
+							addCfg.FeeDen = selFeeDen
+							return runAddLiquidityWizard(addCfg, walletClient, nodeClient, lbtcAsset, balances, broadcast)
+						}
+						fmt.Fprintf(os.Stderr, "\nTo skip discovery: anchor create-pool --force --asset0 %s --asset1 %s\n", asset0, asset1)
+						return nil
+					}
+
+					fmt.Fprintf(os.Stderr, "No existing pools found. Proceeding to create.\n")
+				}
 
 				if deposit0 == 0 {
 					bal := balances[asset0]
@@ -297,12 +312,26 @@ func cmdCreatePool() *cobra.Command {
 			fmt.Fprintf(os.Stderr, "pool_creation: %s\n", cfg.PoolCreation.Address)
 			fmt.Fprintf(os.Stderr, "pool_a:        %s\n", cfg.PoolA.Address)
 
-			// 1b. Duplicate pool detection — check if pool_a address already has UTXOs.
+			// 1b. Duplicate pool detection — check saved configs first, then compiled address.
 			if !force {
-				existingUTXOs, err := nodeClient.ScanAddress(cfg.PoolA.Address)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "warn: duplicate check failed: %v\n", err)
-				} else if len(existingUTXOs) > 0 {
+				var existingUTXOs []rpc.ScanResult
+				// Primary: search saved pool configs.
+				if saved, savedPath := findMatchingPoolConfig(asset0, asset1, feeNum, feeDen); saved != nil {
+					fmt.Fprintf(os.Stderr, "  Found existing config: %s\n", savedPath)
+					if utxos, scanErr := nodeClient.ScanAddress(saved.PoolA.Address); scanErr == nil && len(utxos) > 0 {
+						existingUTXOs = utxos
+						cfg = saved // use saved config's addresses for the error message
+					}
+				}
+				// Secondary: check freshly compiled address.
+				if len(existingUTXOs) == 0 {
+					if utxos, scanErr := nodeClient.ScanAddress(cfg.PoolA.Address); scanErr != nil {
+						fmt.Fprintf(os.Stderr, "warn: duplicate check failed: %v\n", scanErr)
+					} else {
+						existingUTXOs = utxos
+					}
+				}
+				if len(existingUTXOs) > 0 {
 					// Compute live reserves from the existing UTXOs.
 					var existReserve0, existReserve1 uint64
 					for _, u := range existingUTXOs {
@@ -479,10 +508,17 @@ func cmdCreatePool() *cobra.Command {
 			fmt.Printf("LP Minted:             %d\n", result.LPMinted)
 			fmt.Printf("LP Reserve:            %d\n", pool.LPPremint-result.LPMinted)
 
-			if err := result.PoolConfig.Save(poolFile); err != nil {
-				return fmt.Errorf("update %s: %w", poolFile, err)
+			savePath := poolFile
+			if !cmd.Flags().Changed("pool") {
+				if err := ensurePoolsDir(); err != nil {
+					return fmt.Errorf("create pools/: %w", err)
+				}
+				savePath = poolsSavePath(asset0, asset1, feeNum, feeDen)
 			}
-			fmt.Fprintf(os.Stderr, "Updated %s\n", poolFile)
+			if err := result.PoolConfig.Save(savePath); err != nil {
+				return fmt.Errorf("save %s: %w", savePath, err)
+			}
+			fmt.Fprintf(os.Stderr, "Saved %s\n", savePath)
 
 			// 9. Sign, attach Simplicity witness, and broadcast.
 			if broadcast {
@@ -525,8 +561,9 @@ func cmdCreatePool() *cobra.Command {
 	cmd.Flags().StringVar(&rpcPass, "rpc-pass", "", "RPC password (env: ANCHOR_RPC_PASS)")
 	cmd.Flags().BoolVar(&broadcast, "broadcast", false, "Sign with wallet and broadcast")
 	cmd.Flags().BoolVar(&noAnnounce, "no-announce", false, "Skip OP_RETURN pool discovery announcement")
-	cmd.Flags().BoolVar(&force, "force", false, "Skip duplicate pool check and create anyway")
-	cmd.Flags().IntVar(&startBlock, "start-block", -1, "Block height to start OP_RETURN scan when LP asset ID is unknown (-1 = skip scan, prompt user)")
+	cmd.Flags().BoolVar(&force, "force", false, "Skip pool discovery and create anyway")
+	cmd.Flags().IntVar(&startBlock, "start-block", 0, "Block height to start pool discovery scan from")
+	cmd.Flags().StringVar(&esploraURL, "esplora-url", "", "Esplora API URL for pool discovery (env: ANCHOR_ESPLORA_URL)")
 	cmd.Flags().StringVar(&netName, "network", "", "Network: liquid, testnet, regtest (env: ANCHOR_NETWORK)")
 	return cmd
 }

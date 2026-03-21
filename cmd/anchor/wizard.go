@@ -5,12 +5,16 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 
+	"github.com/0ceanslim/anchor/pkg/compiler"
+	"github.com/0ceanslim/anchor/pkg/esplora"
 	"github.com/0ceanslim/anchor/pkg/pool"
 	"github.com/0ceanslim/anchor/pkg/rpc"
 	"github.com/0ceanslim/anchor/pkg/tx"
+	"github.com/vulpemventures/go-elements/network"
 	"github.com/vulpemventures/go-elements/transaction"
 )
 
@@ -59,6 +63,47 @@ func promptChoice(prompt string, options []string) int {
 	}
 }
 
+// promptMultiChoice prompts the user to enter comma-separated indices (0-based).
+// If allowEmpty is true, pressing Enter returns nil. Otherwise re-prompts.
+func promptMultiChoice(prompt string, max int, allowEmpty bool) []int {
+	for {
+		raw := promptString(prompt)
+		if raw == "" {
+			if allowEmpty {
+				return nil
+			}
+			fmt.Fprintf(os.Stderr, "Please select at least one index.\n")
+			continue
+		}
+		parts := strings.Split(raw, ",")
+		var indices []int
+		seen := make(map[int]bool)
+		valid := true
+		for _, p := range parts {
+			p = strings.TrimSpace(p)
+			if p == "" {
+				continue
+			}
+			n, err := strconv.Atoi(p)
+			if err != nil || n < 0 || n >= max {
+				fmt.Fprintf(os.Stderr, "Invalid index %q — must be 0..%d\n", p, max-1)
+				valid = false
+				break
+			}
+			if !seen[n] {
+				seen[n] = true
+				indices = append(indices, n)
+			}
+		}
+		if valid && len(indices) > 0 {
+			return indices
+		}
+		if valid {
+			fmt.Fprintf(os.Stderr, "No indices selected.\n")
+		}
+	}
+}
+
 // walletExplicitAssets returns a map of assetID → total sats of explicit (unblinded)
 // UTXOs in the wallet. Confidential UTXOs are excluded because they cannot be
 // used as inputs in manually-built transactions.
@@ -75,6 +120,230 @@ func walletExplicitAssets(walletClient *rpc.Client) (map[string]uint64, error) {
 		totals[u.Asset] += satoshis(u.Amount)
 	}
 	return totals, nil
+}
+
+// discoveredPool holds a pool found via chain scanning.
+type discoveredPool struct {
+	txid          string
+	asset0        string
+	asset1        string
+	feeNum        uint16
+	feeDen        uint16
+	height        int
+	poolAAddr     string
+	poolBAddr     string
+	lpAsset       string
+	reserve0      uint64
+	reserve1      uint64
+	depth         uint64
+	closed        bool
+	creationVinTx string // vin[0] txid from creation tx (for LP asset derivation)
+	creationVinV  uint32 // vin[0] vout from creation tx
+}
+
+// discoverPools scans the chain for ANCHR OP_RETURN pool announcements matching
+// the given asset pair. Uses Esplora if esploraURL is set, otherwise falls back
+// to RPC block-by-block scan. Verifies each pool's compatibility with the current
+// contracts (compiles and checks pool_a address match). Returns only compatible
+// pools sorted by depth (deepest first).
+//
+// If buildDir is empty or net is nil, verification is skipped (all pools returned).
+func discoverPools(esploraURL string, nodeClient *rpc.Client, asset0, asset1 string, startBlock int, buildDir string, net *network.Network) ([]discoveredPool, error) {
+	var pools []discoveredPool
+
+	if esploraURL != "" {
+		ec := esplora.New(esploraURL)
+		fmt.Fprintf(os.Stderr, "Scanning for existing pools via Esplora...\n")
+
+		records, err := esplora.ScanPoolCreations(ec, asset0, asset1, startBlock)
+		if err != nil {
+			return nil, fmt.Errorf("esplora scan: %w", err)
+		}
+
+		for _, rec := range records {
+			creationTx, err := ec.GetTx(rec.TxID)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "warn: get tx %s: %v\n", rec.TxID, err)
+				continue
+			}
+			if len(creationTx.Vout) < 3 || len(creationTx.Vin) == 0 {
+				continue
+			}
+			poolAAddr := creationTx.Vout[0].ScriptPubKeyAddr
+			poolBAddr := creationTx.Vout[1].ScriptPubKeyAddr
+			if poolAAddr == "" || poolBAddr == "" {
+				continue
+			}
+			lpID, err := tx.ComputeLPAssetID(creationTx.Vin[0].TxID, creationTx.Vin[0].Vout)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "warn: LP asset for tx %s: %v\n", rec.TxID, err)
+				continue
+			}
+			lpAsset := hex.EncodeToString(revBytes(lpID[:]))
+
+			utxosA, err := ec.GetAddressUTXOs(poolAAddr)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "warn: utxos pool_a %s: %v\n", poolAAddr, err)
+				continue
+			}
+			utxosB, err := ec.GetAddressUTXOs(poolBAddr)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "warn: utxos pool_b %s: %v\n", poolBAddr, err)
+				continue
+			}
+
+			var reserve0, reserve1 uint64
+			for _, u := range utxosA {
+				if strings.EqualFold(u.Asset, rec.Asset0) {
+					reserve0 += u.Value
+				}
+			}
+			for _, u := range utxosB {
+				if strings.EqualFold(u.Asset, rec.Asset1) {
+					reserve1 += u.Value
+				}
+			}
+
+			pools = append(pools, discoveredPool{
+				txid:          rec.TxID,
+				asset0:        rec.Asset0,
+				asset1:        rec.Asset1,
+				feeNum:        rec.FeeNum,
+				feeDen:        rec.FeeDen,
+				height:        rec.Height,
+				poolAAddr:     poolAAddr,
+				poolBAddr:     poolBAddr,
+				lpAsset:       lpAsset,
+				reserve0:      reserve0,
+				reserve1:      reserve1,
+				depth:         reserve0 * reserve1,
+				closed:        reserve0 == 0 && reserve1 == 0,
+				creationVinTx: creationTx.Vin[0].TxID,
+				creationVinV:  creationTx.Vin[0].Vout,
+			})
+		}
+	} else {
+		fmt.Fprintf(os.Stderr, "Scanning for existing pools via RPC (slow)...\n")
+		records, err := rpc.ScanPoolCreations(nodeClient, asset0, asset1, startBlock)
+		if err != nil {
+			return nil, fmt.Errorf("rpc scan: %w", err)
+		}
+
+		for _, rec := range records {
+			decoded, err := nodeClient.DecodeRawTransaction(rec.TxID)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "warn: decode tx %s: %v\n", rec.TxID, err)
+				continue
+			}
+			if len(decoded.Vout) < 2 || len(decoded.Vin) == 0 {
+				continue
+			}
+			poolAAddr := decoded.Vout[0].ScriptPubKey.Address
+			poolBAddr := decoded.Vout[1].ScriptPubKey.Address
+			if poolAAddr == "" || poolBAddr == "" {
+				continue
+			}
+			lpID, err := tx.ComputeLPAssetID(decoded.Vin[0].TxID, decoded.Vin[0].Vout)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "warn: LP asset for tx %s: %v\n", rec.TxID, err)
+				continue
+			}
+			lpAsset := hex.EncodeToString(revBytes(lpID[:]))
+
+			utxosA, err := nodeClient.ScanAddress(poolAAddr)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "warn: scan pool_a %s: %v\n", poolAAddr, err)
+				continue
+			}
+			utxosB, err := nodeClient.ScanAddress(poolBAddr)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "warn: scan pool_b %s: %v\n", poolBAddr, err)
+				continue
+			}
+
+			var reserve0, reserve1 uint64
+			for _, u := range utxosA {
+				if strings.EqualFold(u.Asset, rec.Asset0) {
+					reserve0 += satoshis(u.Amount)
+				}
+			}
+			for _, u := range utxosB {
+				if strings.EqualFold(u.Asset, rec.Asset1) {
+					reserve1 += satoshis(u.Amount)
+				}
+			}
+
+			pools = append(pools, discoveredPool{
+				txid:          rec.TxID,
+				asset0:        rec.Asset0,
+				asset1:        rec.Asset1,
+				feeNum:        rec.FeeNum,
+				feeDen:        rec.FeeDen,
+				height:        rec.Height,
+				poolAAddr:     poolAAddr,
+				poolBAddr:     poolBAddr,
+				lpAsset:       lpAsset,
+				reserve0:      reserve0,
+				reserve1:      reserve1,
+				depth:         reserve0 * reserve1,
+				closed:        reserve0 == 0 && reserve1 == 0,
+				creationVinTx: decoded.Vin[0].TxID,
+				creationVinV:  decoded.Vin[0].Vout,
+			})
+		}
+	}
+
+	// Sort by depth descending (deepest pool first).
+	sort.Slice(pools, func(i, j int) bool {
+		return pools[i].depth > pools[j].depth
+	})
+
+	// Verify contract compatibility if buildDir and net are provided.
+	if buildDir != "" && net != nil && len(pools) > 0 {
+		fmt.Fprintf(os.Stderr, "Verifying pool compatibility with current contracts...\n")
+		var compatible []discoveredPool
+		for _, p := range pools {
+			lpAssetID, err := tx.ComputeLPAssetID(p.creationVinTx, p.creationVinV)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "warn: LP asset for tx %s: %v\n", p.txid[:16], err)
+				continue
+			}
+			feeDiff := uint64(p.feeDen) - uint64(p.feeNum)
+			patchMap := map[string]compiler.ArgsParam{
+				"ASSET0":     {Value: normalizeHex(p.asset0), Type: "u256"},
+				"ASSET1":     {Value: normalizeHex(p.asset1), Type: "u256"},
+				"FEE_NUM":    {Value: fmt.Sprintf("%d", p.feeNum), Type: "u64"},
+				"FEE_DEN":    {Value: fmt.Sprintf("%d", p.feeDen), Type: "u64"},
+				"FEE_DIFF":   {Value: fmt.Sprintf("%d", feeDiff), Type: "u64"},
+				"LP_PREMINT": {Value: fmt.Sprintf("%d", pool.LPPremint), Type: "u64"},
+			}
+			if err := compiler.PatchParams(buildDir, patchMap); err != nil {
+				fmt.Fprintf(os.Stderr, "warn: patch params for tx %s: %v\n", p.txid[:16], err)
+				continue
+			}
+			for _, shlName := range []string{
+				"pool_a_swap.shl", "pool_a_remove.shl",
+				"pool_b_swap.shl", "pool_b_remove.shl",
+				"lp_reserve_add.shl", "lp_reserve_remove.shl",
+			} {
+				shlPath := buildDir + "/" + shlName
+				_ = compiler.PatchLPAssetID(shlPath, shlPath, lpAssetID)
+			}
+			cfg, err := compiler.CompileAll(buildDir, net)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "warn: compile for tx %s: %v\n", p.txid[:16], err)
+				continue
+			}
+			if cfg.PoolA.Address != p.poolAAddr {
+				fmt.Fprintf(os.Stderr, "Skipping pool %s... — created with older contract version\n", p.txid[:16])
+				continue
+			}
+			compatible = append(compatible, p)
+		}
+		pools = compatible
+	}
+
+	return pools, nil
 }
 
 // resolveLPAsset walks back from poolATxID through the pool_a input chain until

@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/0ceanslim/anchor/pkg/pool"
@@ -26,7 +27,14 @@ func cmdRemoveLiquidity() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			rpcURL, rpcUser, rpcPass = resolveRPC(rpcURL, rpcUser, rpcPass)
 			netName = resolveNetwork(netName)
-			cfg, err := pool.Load(poolFile)
+			resolved, err := resolvePoolFile(cmd, poolFile)
+			if err != nil {
+				return err
+			}
+			if resolved == "" {
+				return fmt.Errorf("no pool config found — use 'anchor find-pools --save' to discover one, or specify --pool")
+			}
+			cfg, err := pool.Load(resolved)
 			if err != nil {
 				return err
 			}
@@ -105,6 +113,46 @@ func cmdRemoveLiquidity() *cobra.Command {
 				fmt.Fprintf(os.Stderr, "LP amount: %d tokens (full UTXO balance)\n", lpAmount)
 			}
 
+			// Track full UTXO balance before any reduction — needed for LP change output.
+			lpUTXOAmount := lpAmount
+
+			// In wizard mode (no --lp-amount flag), prompt for how much to remove.
+			if !cmd.Flags().Changed("lp-amount") && isTerminal() {
+				totalSupplyPreview := state.TotalSupply()
+				p0All, p1All := pool.RemovePayouts(lpAmount, state.Reserve0, state.Reserve1, totalSupplyPreview)
+				fmt.Fprintf(os.Stderr, "\nYou have %d LP tokens.\n", lpAmount)
+				fmt.Fprintf(os.Stderr, "  100%% → %d asset0 + %d asset1\n", p0All, p1All)
+				fmt.Fprintf(os.Stderr, "\nEnter amount of LP tokens to redeem, or a percentage (e.g. 50%%).\n")
+				for {
+					input := promptString(fmt.Sprintf("LP to remove [default: %d = 100%%]: ", lpAmount))
+					if input == "" {
+						break // keep full amount
+					}
+					if strings.HasSuffix(input, "%") {
+						pctStr := strings.TrimSuffix(input, "%")
+						pctStr = strings.TrimSpace(pctStr)
+						pct, err := strconv.ParseFloat(pctStr, 64)
+						if err != nil || pct <= 0 || pct > 100 {
+							fmt.Fprintf(os.Stderr, "Enter a percentage between 1%% and 100%%.\n")
+							continue
+						}
+						lpAmount = uint64(float64(lpAmount) * pct / 100)
+						if lpAmount == 0 {
+							fmt.Fprintf(os.Stderr, "Amount too small — rounds to 0 tokens.\n")
+							continue
+						}
+						break
+					}
+					n, err := strconv.ParseUint(input, 10, 64)
+					if err != nil || n == 0 || n > lpAmount {
+						fmt.Fprintf(os.Stderr, "Enter a value between 1 and %d.\n", lpAmount)
+						continue
+					}
+					lpAmount = n
+					break
+				}
+			}
+
 			// Auto-derive payout addresses from wallet (unconfidential — tx uses explicit outputs).
 			newAddr := func(label string) (string, error) {
 				a, err := walletClient.GetNewAddress()
@@ -128,9 +176,6 @@ func cmdRemoveLiquidity() *cobra.Command {
 					return err
 				}
 			}
-			// Track full UTXO balance before any capping — needed for LP asset value balance.
-			lpUTXOAmount := lpAmount
-
 			// Cap lpAmount to avoid dust pool outputs.
 			// Elements rejects explicit taproot outputs below ~330 sats.
 			// Each remaining pool UTXO (pool_a, pool_b) must stay >= dustMin.
@@ -160,13 +205,11 @@ func cmdRemoveLiquidity() *cobra.Command {
 			fmt.Printf("  Asset1 payout:     %d sats\n", p1)
 			fmt.Printf("  Fee:               %d sats\n", fee)
 
-			if broadcast {
-				fmt.Fprintf(os.Stderr, "\nProceed? [y/n]: ")
-				var answer string
-				fmt.Scanln(&answer)
-				if strings.ToLower(strings.TrimSpace(answer)) != "y" {
-					fmt.Fprintln(os.Stderr, "Aborted.")
-					return nil
+			// In interactive mode without --broadcast, prompt to confirm and broadcast.
+			if !broadcast && isTerminal() {
+				answer := promptString("\nConfirm and broadcast? [y/n]: ")
+				if strings.ToLower(answer) == "y" {
+					broadcast = true
 				}
 			}
 
@@ -271,38 +314,41 @@ func cmdRemoveLiquidity() *cobra.Command {
 			}
 			fmt.Printf("\nPayout0:     %d sat\n", result.Payout0)
 			fmt.Printf("Payout1:     %d sat\n", result.Payout1)
-			fmt.Printf("Tx (hex): %s\n", result.TxHex)
 
-			if broadcast {
-				// Sign user inputs (3=LP, 4=L-BTC) with wallet first.
-				signed, complete, err := walletClient.SignRawTransactionWithWallet(result.TxHex)
-				if err != nil {
-					return translateError(fmt.Errorf("sign: %w", err))
-				}
-				if !complete {
-					fmt.Fprintln(os.Stderr, "Warning: signing incomplete — some inputs may not be wallet-owned")
-				}
-				// Attach Simplicity witnesses to pool inputs AFTER signing.
-				finalHex := signed
-				for idx, wit := range []struct {
-					i int
-					w [][]byte
-				}{
-					{0, result.PoolAWitness},
-					{1, result.PoolBWitness},
-					{2, result.LpReserveWitness},
-				} {
-					finalHex, err = attachWitness(finalHex, wit.i, wit.w)
-					if err != nil {
-						return fmt.Errorf("attach witness[%d]: %w", idx, err)
-					}
-				}
-				txid, err := walletClient.SendRawTransaction(finalHex)
-				if err != nil {
-					return translateError(fmt.Errorf("broadcast: %w", err))
-				}
-				fmt.Printf("Txid: %s\n", txid)
+			if !broadcast {
+				fmt.Printf("Tx (hex): %s\n", result.TxHex)
+				fmt.Fprintln(os.Stderr, "(use --broadcast to sign and send)")
+				return nil
 			}
+
+			// Sign user inputs (3=LP, 4=L-BTC) with wallet first.
+			signed, complete, err := walletClient.SignRawTransactionWithWallet(result.TxHex)
+			if err != nil {
+				return translateError(fmt.Errorf("sign: %w", err))
+			}
+			if !complete {
+				fmt.Fprintln(os.Stderr, "Warning: signing incomplete — some inputs may not be wallet-owned")
+			}
+			// Attach Simplicity witnesses to pool inputs AFTER signing.
+			finalHex := signed
+			for idx, wit := range []struct {
+				i int
+				w [][]byte
+			}{
+				{0, result.PoolAWitness},
+				{1, result.PoolBWitness},
+				{2, result.LpReserveWitness},
+			} {
+				finalHex, err = attachWitness(finalHex, wit.i, wit.w)
+				if err != nil {
+					return fmt.Errorf("attach witness[%d]: %w", idx, err)
+				}
+			}
+			txid, err := walletClient.SendRawTransaction(finalHex)
+			if err != nil {
+				return translateError(fmt.Errorf("broadcast: %w", err))
+			}
+			fmt.Printf("Txid: %s\n", txid)
 			return nil
 		},
 	}

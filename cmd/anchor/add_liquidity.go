@@ -108,36 +108,43 @@ func cmdAddLiquidity() *cobra.Command {
 					fmt.Fprintf(os.Stderr, "Pool fee: %d/%d (%.2f%%)\n", wizFeeNum, wizFeeDen, pct)
 				}
 
-				// Compile and scan for existing pool.
+				// Search for existing pool.
 				fmt.Fprintf(os.Stderr, "Searching for pool...\n")
-				wizPatch := map[string]compiler.ArgsParam{
-					"ASSET0":   {Value: normalizeHex(selA0.id), Type: "u256"},
-					"ASSET1":   {Value: normalizeHex(selA1.id), Type: "u256"},
-					"FEE_NUM":  {Value: fmt.Sprintf("%d", wizFeeNum), Type: "u64"},
-					"FEE_DEN":  {Value: fmt.Sprintf("%d", wizFeeDen), Type: "u64"},
-					"FEE_DIFF": {Value: fmt.Sprintf("%d", wizFeeDen-wizFeeNum), Type: "u64"},
-				}
-				if err := compiler.PatchParams(buildDir, wizPatch); err != nil {
-					return fmt.Errorf("patch: %w", err)
-				}
-				wizCfg, wizErr := compiler.CompileAll(buildDir, net)
-				if wizErr != nil {
-					return fmt.Errorf("compile: %w", wizErr)
-				}
-				fmt.Fprintf(os.Stderr, "  Scanning: %s\n", wizCfg.PoolA.Address)
-				poolUTXOs, _ := client.ScanAddress(wizCfg.PoolA.Address)
 
-				// Secondary: try pool.json address if contracts changed.
+				// Primary: search saved pool configs for a matching pair + fee.
+				var wizCfg *pool.Config
+				var poolUTXOs []rpc.ScanResult
+				if saved, savedPath := findMatchingPoolConfig(selA0.id, selA1.id, wizFeeNum, wizFeeDen); saved != nil {
+					fmt.Fprintf(os.Stderr, "  Found config: %s\n", savedPath)
+					fmt.Fprintf(os.Stderr, "  Scanning: %s\n", saved.PoolA.Address)
+					if utxos, scanErr := client.ScanAddress(saved.PoolA.Address); scanErr == nil && len(utxos) > 0 {
+						poolUTXOs = utxos
+						wizCfg = saved
+					}
+				}
+
+				// Secondary: compile contracts and scan the derived address.
+				// This works when the .shl files were previously patched with the
+				// correct LP_ASSET_ID (e.g., after a prior find-pools --save).
 				if len(poolUTXOs) == 0 {
-					if saved, loadErr := pool.Load(poolFile); loadErr == nil &&
-						strings.EqualFold(saved.Asset0, selA0.id) &&
-						strings.EqualFold(saved.Asset1, selA1.id) &&
-						saved.FeeNum == wizFeeNum && saved.FeeDen == wizFeeDen &&
-						saved.PoolA.Address != "" && saved.PoolA.Address != wizCfg.PoolA.Address {
-						if alt, altErr := client.ScanAddress(saved.PoolA.Address); altErr == nil && len(alt) > 0 {
-							poolUTXOs = alt
-							wizCfg = saved
-						}
+					wizPatch := map[string]compiler.ArgsParam{
+						"ASSET0":   {Value: normalizeHex(selA0.id), Type: "u256"},
+						"ASSET1":   {Value: normalizeHex(selA1.id), Type: "u256"},
+						"FEE_NUM":  {Value: fmt.Sprintf("%d", wizFeeNum), Type: "u64"},
+						"FEE_DEN":  {Value: fmt.Sprintf("%d", wizFeeDen), Type: "u64"},
+						"FEE_DIFF": {Value: fmt.Sprintf("%d", wizFeeDen-wizFeeNum), Type: "u64"},
+					}
+					if err := compiler.PatchParams(buildDir, wizPatch); err != nil {
+						return fmt.Errorf("patch: %w", err)
+					}
+					compiled, compileErr := compiler.CompileAll(buildDir, net)
+					if compileErr != nil {
+						return fmt.Errorf("compile: %w", compileErr)
+					}
+					fmt.Fprintf(os.Stderr, "  Scanning: %s\n", compiled.PoolA.Address)
+					if utxos, scanErr := client.ScanAddress(compiled.PoolA.Address); scanErr == nil && len(utxos) > 0 {
+						poolUTXOs = utxos
+						wizCfg = compiled
 					}
 				}
 
@@ -147,10 +154,13 @@ func cmdAddLiquidity() *cobra.Command {
 					return nil
 				}
 
-				// Get LP asset ID: try pool.json, then walk back from pool UTXO creating tx.
+				// Get LP asset ID: try matching pool config, then walk back from pool UTXO creating tx.
 				wizLPAsset := ""
-				if saved, loadErr := pool.Load(poolFile); loadErr == nil {
-					if strings.EqualFold(saved.Asset0, selA0.id) && strings.EqualFold(saved.Asset1, selA1.id) {
+				if wizCfg != nil && wizCfg.LPAssetID != "" {
+					wizLPAsset = wizCfg.LPAssetID
+				}
+				if wizLPAsset == "" {
+					if saved, _ := findMatchingPoolConfig(selA0.id, selA1.id, wizFeeNum, wizFeeDen); saved != nil {
 						wizLPAsset = saved.LPAssetID
 					}
 				}
@@ -178,8 +188,15 @@ func cmdAddLiquidity() *cobra.Command {
 				return runAddLiquidityWizard(wizCfg, wc, client, lbtcAsset, balances, broadcast)
 			}
 
-			// ── Flag mode: load pool.json and proceed ────────────────────────────────
-			cfg, err := pool.Load(poolFile)
+			// ── Flag mode: load pool config and proceed ────────────────────────────────
+			resolved, resolveErr := resolvePoolFile(cmd, poolFile)
+			if resolveErr != nil {
+				return resolveErr
+			}
+			if resolved == "" {
+				return fmt.Errorf("no pool config found — use 'anchor find-pools --save' to discover one, or specify --pool")
+			}
+			cfg, err := pool.Load(resolved)
 			if err != nil {
 				return err
 			}

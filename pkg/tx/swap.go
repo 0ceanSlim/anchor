@@ -20,11 +20,13 @@ type SwapParams struct {
 	// Minimum acceptable output (slippage guard, checked off-chain only)
 	MinAmountOut uint64
 	// User's input UTXO (provides AmountIn of the input asset)
-	UserTxID  string
-	UserVout  uint32
-	UserAsset string
-	// Where to send output asset
+	UserTxID        string
+	UserVout        uint32
+	UserAsset       string
+	UserInputAmount uint64 // actual UTXO amount; change returned if > AmountIn (or > AmountIn+Fee when input is L-BTC)
+	// Where to send output asset and change
 	UserOutputAddr string
+	ChangeAddr     string // receives input asset change and L-BTC change (if any)
 	// Pool output addresses (from pool.json)
 	PoolAAddr string
 	PoolBAddr string
@@ -37,6 +39,11 @@ type SwapParams struct {
 	// Read from pool.json (Config.FeeNum / Config.FeeDen).
 	FeeNum uint64
 	FeeDen uint64
+	// Optional: separate L-BTC UTXO for fee (when input asset != L-BTC)
+	// If not set, fee is deducted from the user's input UTXO (input asset must be L-BTC).
+	FeeTxID   string
+	FeeVout   uint32
+	FeeAmount uint64 // actual fee UTXO amount; L-BTC change returned if > Fee
 	// Pool swap-variant binaries, CMRs, and control blocks
 	PoolABinaryHex    string
 	PoolBBinaryHex    string
@@ -55,13 +62,16 @@ type SwapResult struct {
 }
 
 // BuildSwap builds a swap transaction.
-// Input layout: [pool_a, pool_b, user_input]
-// Output layout: [new_pool_a, new_pool_b, user_output, fee]
 //
-// NOTE: Pool witnesses (PoolAWitness, PoolBWitness) are returned separately
-// and must be attached to inputs[0,1] AFTER signing with the wallet, because
-// signrawtransactionwithwallet cannot process transactions with pre-existing
-// witness data.
+// Input layout:  [pool_a(0), pool_b(1), user_input(2), fee_input(3, optional)]
+// Output layout: [new_pool_a(0), new_pool_b(1), user_output(2),
+//
+//	input_change(3, if any), lbtc_change(4, if any), fee(last)]
+//
+// When the input asset is L-BTC, the user UTXO covers both AmountIn and Fee.
+// When the input asset is NOT L-BTC, a separate fee UTXO (FeeTxID) must be provided.
+//
+// Pool witnesses are returned separately and must be attached AFTER wallet signing.
 func BuildSwap(params *SwapParams) (*SwapResult, error) {
 	st := params.State
 
@@ -86,6 +96,18 @@ func BuildSwap(params *SwapParams) (*SwapResult, error) {
 		newReserve1 = st.Reserve1 + params.AmountIn
 	}
 
+	// Determine which asset the user is sending.
+	inAssetID := params.Asset1
+	if params.SwapAsset0In {
+		inAssetID = params.Asset0
+	}
+	outAssetID := params.Asset1
+	if !params.SwapAsset0In {
+		outAssetID = params.Asset0
+	}
+	inputIsLBTC := inAssetID == params.LBTCAsset
+	hasSeparateFeeInput := params.FeeTxID != ""
+
 	tx := transaction.NewTx(2)
 
 	// Input[0]: pool_a
@@ -99,6 +121,12 @@ func BuildSwap(params *SwapParams) (*SwapResult, error) {
 	// Input[2]: user's asset input
 	userTxid, _ := elementsutil.TxIDToBytes(params.UserTxID)
 	tx.AddInput(transaction.NewTxInput(userTxid, params.UserVout))
+
+	// Input[3]: separate L-BTC fee input (if input asset != L-BTC)
+	if hasSeparateFeeInput {
+		feeTxid, _ := elementsutil.TxIDToBytes(params.FeeTxID)
+		tx.AddInput(transaction.NewTxInput(feeTxid, params.FeeVout))
+	}
 
 	// Output[0]: new pool_a
 	poolAOut, err := buildOutput(params.PoolAAddr, params.Asset0, newReserve0)
@@ -115,17 +143,46 @@ func BuildSwap(params *SwapParams) (*SwapResult, error) {
 	tx.AddOutput(poolBOut)
 
 	// Output[2]: user receives output asset
-	outAsset := params.Asset1
-	if !params.SwapAsset0In {
-		outAsset = params.Asset0
-	}
-	userOut, err := buildOutput(params.UserOutputAddr, outAsset, amountOut)
+	userOut, err := buildOutput(params.UserOutputAddr, outAssetID, amountOut)
 	if err != nil {
 		return nil, fmt.Errorf("user out: %w", err)
 	}
 	tx.AddOutput(userOut)
 
-	// Output[3]: fee
+	// Change outputs
+	if params.ChangeAddr != "" {
+		if inputIsLBTC {
+			// Input asset is L-BTC: change = UserInputAmount - AmountIn - Fee
+			if lbtcChange := params.UserInputAmount - params.AmountIn - params.Fee; lbtcChange > 0 {
+				chg, err := buildOutput(params.ChangeAddr, params.LBTCAsset, lbtcChange)
+				if err != nil {
+					return nil, fmt.Errorf("lbtc change out: %w", err)
+				}
+				tx.AddOutput(chg)
+			}
+		} else {
+			// Input asset is NOT L-BTC: input change = UserInputAmount - AmountIn
+			if inputChange := params.UserInputAmount - params.AmountIn; inputChange > 0 {
+				chg, err := buildOutput(params.ChangeAddr, inAssetID, inputChange)
+				if err != nil {
+					return nil, fmt.Errorf("input change out: %w", err)
+				}
+				tx.AddOutput(chg)
+			}
+			// L-BTC change from separate fee input
+			if hasSeparateFeeInput {
+				if lbtcChange := params.FeeAmount - params.Fee; lbtcChange > 0 {
+					chg, err := buildOutput(params.ChangeAddr, params.LBTCAsset, lbtcChange)
+					if err != nil {
+						return nil, fmt.Errorf("lbtc change out: %w", err)
+					}
+					tx.AddOutput(chg)
+				}
+			}
+		}
+	}
+
+	// Fee output (must be last)
 	feeOut, err := buildFeeOutput(params.LBTCAsset, params.Fee)
 	if err != nil {
 		return nil, fmt.Errorf("fee out: %w", err)
@@ -134,7 +191,7 @@ func BuildSwap(params *SwapParams) (*SwapResult, error) {
 
 	// Build witnesses but do NOT attach to the transaction before serializing.
 	// signrawtransactionwithwallet fails on transactions with pre-existing witness data.
-	// The caller must: sign (input[2]), then attach these witnesses to inputs[0,1].
+	// The caller must: sign user inputs, then attach these witnesses to inputs[0,1].
 	poolAWit, err := noWitnessWithCB(params.PoolABinaryHex, params.PoolACMRHex, params.PoolAControlBlock)
 	if err != nil {
 		return nil, fmt.Errorf("pool_a witness: %w", err)
@@ -155,4 +212,3 @@ func BuildSwap(params *SwapParams) (*SwapResult, error) {
 		PoolBWitness: poolBWit,
 	}, nil
 }
-

@@ -227,3 +227,73 @@ secondary.
 **Lesson:** Use protocol-inherent signals (issuance events) over application-layer
 conventions (OP_RETURN) for critical detection logic. Application conventions are optional;
 protocol events are guaranteed.
+
+---
+
+## 14. Track UTXO Amounts Before User Prompts Modify Them
+
+**The fumble:** `remove-liquidity` captured `lpUTXOAmount := lpAmount` after the wizard
+prompt had already reduced `lpAmount` from 35355 to 17677 (user chose 50%). The tx builder
+received `UserLPAmount = 17677` and `LPBurned = 17677`, saw no change needed, and produced
+no LP change output. The actual UTXO input had 35355 tokens — `value in != value out`.
+
+**The fix:** Capture `lpUTXOAmount` immediately after UTXO selection, before any user
+prompt can modify `lpAmount`.
+
+**Lesson:** When a variable serves double duty (display to user AND tx builder input),
+snapshot the original value before any interactive modification. The tx builder needs the
+real UTXO amount, not the user's requested subset.
+
+---
+
+## 15. Swap Transactions Need Change Outputs
+
+**The fumble:** `BuildSwap` assumed the user UTXO contained exactly `amountIn + fee` and
+produced no change output. In practice, UTXO auto-selection picks the smallest UTXO that
+*covers* the needed amount — any surplus was silently lost, causing `value in != value out`.
+
+**Also:** The swap tx assumed the fee could always come from the user's input UTXO. This
+only works when the input asset is L-BTC. Swapping a non-L-BTC asset had no way to pay the
+miner fee.
+
+**The fix:** Added `UserInputAmount`, `ChangeAddr`, and separate fee UTXO fields
+(`FeeTxID`/`FeeVout`/`FeeAmount`) to `SwapParams`. `BuildSwap` now emits change outputs for
+input asset surplus and L-BTC fee surplus. When input asset != L-BTC, a separate L-BTC UTXO
+is selected for the fee.
+
+**Lesson:** Every tx builder must account for the full value of every input. "Exact amount"
+UTXOs are a test convenience — real wallets have fragmented balances. Always emit change.
+
+---
+
+## 16. Multiple Buffered Readers on stdin Steal Bytes
+
+**The fumble:** `resolvePoolFile` used `bufio.NewScanner(os.Stdin)` for its prompt while
+wizard code used a global `stdinReader = bufio.NewReader(os.Stdin)`. Two buffered readers on
+the same underlying `os.Stdin` race to consume bytes — one reader's buffer steals input
+intended for the other, causing prompts to silently skip or read garbage.
+
+**The fix:** Single shared `stdinReader` (`bufio.NewReader`) used by all prompt helpers
+(`promptString`, `promptChoice`, `promptUint64`, `promptMultiChoice`). Removed all
+`bufio.NewScanner(os.Stdin)` and `fmt.Scanln` from command files.
+
+**Lesson:** Never create multiple buffered readers on a shared unbuffered source. Use a
+single shared reader and route all reads through it.
+
+---
+
+## 17. LP_ASSET_ID Makes Pool Addresses Unique — Compile-and-Scan Doesn't Work
+
+**The fumble:** Pool discovery tried to find pools by compiling contracts with
+`(asset0, asset1, feeNum, feeDen)` and scanning for the resulting address. This always
+failed because `LP_ASSET_ID` is baked into the remove-variant and lp_reserve contract CMRs,
+which affect the dual-leaf taproot address. Without the correct LP_ASSET_ID (derived from
+the creation tx's vin[0] outpoint), the compiled address doesn't match.
+
+**The fix:** Pool discovery scans the chain for ANCHR OP_RETURN creation announcements,
+extracts pool addresses from the creation tx outputs, and only then compiles contracts with
+the correct LP_ASSET_ID to verify compatibility.
+
+**Lesson:** When contract parameters are baked into the address derivation, you cannot
+derive the address without all parameters. If a parameter is only known from on-chain data,
+you must scan first, compile second.

@@ -5,11 +5,91 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"path/filepath"
 	"strings"
 
+	"github.com/0ceanslim/anchor/pkg/pool"
+	"github.com/spf13/cobra"
 	"github.com/vulpemventures/go-elements/network"
 	"github.com/vulpemventures/go-elements/transaction"
 )
+
+// resolvePoolFile determines which pool config file to use.
+// If --pool was explicitly set, it returns that path directly.
+// Otherwise it searches pools/*.json, falling back to the default poolFlag value.
+func resolvePoolFile(cmd *cobra.Command, poolFlag string) (string, error) {
+	// Explicit --pool always wins.
+	if cmd.Flags().Changed("pool") {
+		return poolFlag, nil
+	}
+
+	// Search pools/ directory.
+	matches, _ := filepath.Glob(filepath.Join("pools", "*.json"))
+	switch len(matches) {
+	case 1:
+		fmt.Fprintf(os.Stderr, "Using pool: %s\n", matches[0])
+		return matches[0], nil
+	case 0:
+		// No pools/ files — fall back to default (pool.json) if it exists.
+		if _, err := os.Stat(poolFlag); err == nil {
+			return poolFlag, nil
+		}
+		// Nothing found at all.
+		return "", nil
+	default:
+		// Multiple pools — prompt if interactive, error otherwise.
+		if !isTerminal() {
+			return "", fmt.Errorf("multiple pool configs found in pools/ — use --pool to select one")
+		}
+		fmt.Fprintf(os.Stderr, "Multiple pools found:\n")
+		idx := promptChoice("Select pool", matches)
+		fmt.Fprintf(os.Stderr, "Using pool: %s\n", matches[idx])
+		return matches[idx], nil
+	}
+}
+
+// ensurePoolsDir creates the pools/ directory if it doesn't exist.
+func ensurePoolsDir() error {
+	return os.MkdirAll("pools", 0o755)
+}
+
+// poolsSavePath returns the canonical save path inside pools/ for a given asset pair and fee.
+func poolsSavePath(asset0, asset1 string, feeNum, feeDen uint64) string {
+	return filepath.Join("pools", poolJSONName(asset0, asset1, feeNum, feeDen))
+}
+
+// findMatchingPoolConfig searches pools/*.json and pool.json for a config
+// that matches the given asset pair and fee tier. Returns the loaded config
+// and its file path, or nil if no match is found.
+func findMatchingPoolConfig(asset0, asset1 string, feeNum, feeDen uint64) (*pool.Config, string) {
+	// Collect candidate files: pools/*.json + pool.json.
+	candidates, _ := filepath.Glob(filepath.Join("pools", "*.json"))
+	if _, err := os.Stat("pool.json"); err == nil {
+		candidates = append(candidates, "pool.json")
+	}
+	for _, path := range candidates {
+		cfg, err := pool.Load(path)
+		if err != nil {
+			continue
+		}
+		if strings.EqualFold(cfg.Asset0, asset0) &&
+			strings.EqualFold(cfg.Asset1, asset1) &&
+			cfg.FeeNum == feeNum && cfg.FeeDen == feeDen &&
+			cfg.PoolA.Address != "" {
+			return cfg, path
+		}
+	}
+	return nil, ""
+}
+
+// isTerminal returns true if stdin is connected to a terminal.
+func isTerminal() bool {
+	fi, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	return fi.Mode()&os.ModeCharDevice != 0
+}
 
 // translateError maps known RPC / Simplicity error strings to actionable messages.
 func translateError(err error) error {

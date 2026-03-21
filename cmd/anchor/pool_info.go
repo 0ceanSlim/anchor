@@ -15,7 +15,14 @@ func cmdPoolInfo() *cobra.Command {
 		Short: "Query live pool reserves from chain",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			rpcURL, rpcUser, rpcPass = resolveRPC(rpcURL, rpcUser, rpcPass)
-			cfg, err := pool.Load(poolFile)
+			resolved, err := resolvePoolFile(cmd, poolFile)
+			if err != nil {
+				return err
+			}
+			if resolved == "" {
+				return fmt.Errorf("no pool config found — use 'anchor find-pools --save' to discover one, or specify --pool")
+			}
+			cfg, err := pool.Load(resolved)
 			if err != nil {
 				return err
 			}

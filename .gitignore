@@ -29,6 +29,7 @@ docs/notes
 
 # generated pool config (contains network-specific data)
 pool.json
+pools/
 
 # pre-verification transpiler output (promoted to build/ after testnet verification)
 build/staging/
