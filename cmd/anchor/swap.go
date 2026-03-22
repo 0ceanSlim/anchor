@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -20,6 +21,7 @@ func cmdSwap() *cobra.Command {
 		broadcast                            bool
 		walletName                           string
 		poolID, esploraURL, buildDir         string
+		jsonOut                              bool
 	)
 	cmd := &cobra.Command{
 		Use:   "swap",
@@ -82,11 +84,11 @@ func cmdSwap() *cobra.Command {
 			}
 
 			// Estimate fee if not explicitly set.
+			var feeRate float64
 			if !cmd.Flags().Changed("fee") {
-				if estimated, err := client.EstimateSmartFee(2); err == nil {
-					fee = estimated * 1200 // ~1200 vbytes for swap tx
-					fmt.Fprintf(os.Stderr, "Estimated fee: %d sats\n", fee)
-				}
+				feeRate = estimateFeeRate(client)
+				fee = computeFee(1200, feeRate) // ~1200 vbytes for swap tx
+				fmt.Fprintf(os.Stderr, "Estimated fee: %d sats (%.1f sat/vB)\n", fee, feeRate)
 			}
 
 			// ── Wizard mode: prompt for missing parameters ──────────────
@@ -330,6 +332,23 @@ func cmdSwap() *cobra.Command {
 			}
 
 			if !broadcast {
+				if jsonOut {
+					enc := json.NewEncoder(os.Stdout)
+					enc.SetIndent("", "  ")
+					return enc.Encode(map[string]any{
+						"tx_hex":     result.TxHex,
+						"amount_in":  amountIn,
+						"amount_out": expectedOut,
+						"in_asset":   inputAssetID,
+						"out_asset": func() string {
+							if swapAsset0In {
+								return asset1
+							}
+							return asset0
+						}(),
+						"fee": fee,
+					})
+				}
 				fmt.Printf("Tx (hex): %s\n", result.TxHex)
 				fmt.Fprintln(os.Stderr, "(use --broadcast to sign and send)")
 				return nil
@@ -355,10 +374,28 @@ func cmdSwap() *cobra.Command {
 			if err != nil {
 				return translateError(fmt.Errorf("broadcast: %w", err))
 			}
+			if jsonOut {
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(map[string]any{
+					"txid":       txid,
+					"amount_in":  amountIn,
+					"amount_out": expectedOut,
+					"in_asset":   inputAssetID,
+					"out_asset": func() string {
+						if swapAsset0In {
+							return asset1
+						}
+						return asset0
+					}(),
+					"fee": fee,
+				})
+			}
 			fmt.Printf("Txid: %s\n", txid)
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output in JSON format")
 	cmd.Flags().StringVar(&poolFile, "pool", "pool.json", "Pool config file")
 	cmd.Flags().StringVar(&inAsset, "in-asset", "asset0", "Input asset: 'asset0' or 'asset1'")
 	cmd.Flags().Uint64Var(&amountIn, "amount", 0, "Amount to swap in satoshis")

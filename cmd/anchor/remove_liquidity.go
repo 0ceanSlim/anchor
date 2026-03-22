@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
@@ -21,6 +22,7 @@ func cmdRemoveLiquidity() *cobra.Command {
 		walletName                                        string
 		broadcast                                         bool
 		poolID, esploraURL, buildDir                      string
+		jsonOut                                           bool
 	)
 	cmd := &cobra.Command{
 		Use:   "remove-liquidity",
@@ -76,10 +78,9 @@ func cmdRemoveLiquidity() *cobra.Command {
 
 			// Estimate fee if not explicitly set.
 			if !cmd.Flags().Changed("fee") {
-				if estimated, err := client.EstimateSmartFee(2); err == nil && estimated > 0 {
-					fee = estimated * 1400 // ~1400 vbytes for remove-liquidity tx
-					fmt.Fprintf(os.Stderr, "Estimated fee: %d sats (%d sat/vB × ~1400 vB)\n", fee, estimated)
-				}
+				rate := estimateFeeRate(client)
+				fee = computeFee(1400, rate) // ~1400 vbytes for remove-liquidity tx
+				fmt.Fprintf(os.Stderr, "Estimated fee: %d sats (%.1f sat/vB)\n", fee, rate)
 			}
 
 			// Auto-select LP UTXO from wallet if not provided.
@@ -322,13 +323,29 @@ func cmdRemoveLiquidity() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Printf("\nPayout0:     %d sat\n", result.Payout0)
-			fmt.Printf("Payout1:     %d sat\n", result.Payout1)
 
 			if !broadcast {
+				if jsonOut {
+					enc := json.NewEncoder(os.Stdout)
+					enc.SetIndent("", "  ")
+					return enc.Encode(map[string]any{
+						"tx_hex":    result.TxHex,
+						"lp_burned": lpAmount,
+						"payout0":   result.Payout0,
+						"payout1":   result.Payout1,
+						"fee":       fee,
+					})
+				}
+				fmt.Printf("\nPayout0:     %d sat\n", result.Payout0)
+				fmt.Printf("Payout1:     %d sat\n", result.Payout1)
 				fmt.Printf("Tx (hex): %s\n", result.TxHex)
 				fmt.Fprintln(os.Stderr, "(use --broadcast to sign and send)")
 				return nil
+			}
+
+			if !jsonOut {
+				fmt.Printf("\nPayout0:     %d sat\n", result.Payout0)
+				fmt.Printf("Payout1:     %d sat\n", result.Payout1)
 			}
 
 			// Sign user inputs (3=LP, 4=L-BTC) with wallet first.
@@ -358,10 +375,22 @@ func cmdRemoveLiquidity() *cobra.Command {
 			if err != nil {
 				return translateError(fmt.Errorf("broadcast: %w", err))
 			}
+			if jsonOut {
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(map[string]any{
+					"txid":      txid,
+					"lp_burned": lpAmount,
+					"payout0":   result.Payout0,
+					"payout1":   result.Payout1,
+					"fee":       fee,
+				})
+			}
 			fmt.Printf("Txid: %s\n", txid)
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output in JSON format")
 	cmd.Flags().StringVar(&poolFile, "pool", "pool.json", "Pool config file")
 	cmd.Flags().Uint64Var(&lpAmount, "lp-amount", 0, "LP token amount to burn (auto-set to full UTXO balance if omitted)")
 	cmd.Flags().StringVar(&lpUTXO, "lp-utxo", "", "User's LP token UTXO as txid:vout (auto-selected from wallet if omitted)")

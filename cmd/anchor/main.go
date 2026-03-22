@@ -26,4 +26,5 @@ func init() {
 	rootCmd.AddCommand(cmdRemoveLiquidity())
 	rootCmd.AddCommand(cmdCheck())
 	rootCmd.AddCommand(cmdFindPools())
+	rootCmd.AddCommand(cmdWallet())
 }

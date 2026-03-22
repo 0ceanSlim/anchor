@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
 
 	"github.com/0ceanslim/anchor/pkg/pool"
 	"github.com/0ceanslim/anchor/pkg/rpc"
@@ -11,6 +13,7 @@ import (
 func cmdPoolInfo() *cobra.Command {
 	var poolFile, rpcURL, rpcUser, rpcPass, esploraURL, netName string
 	var poolID, buildDir string
+	var jsonOut bool
 	cmd := &cobra.Command{
 		Use:   "pool-info",
 		Short: "Query live pool reserves from chain",
@@ -30,6 +33,25 @@ func cmdPoolInfo() *cobra.Command {
 					return err
 				}
 				feeStr := fmt.Sprintf("%.2f%%", float64(p.feeDen-p.feeNum)/float64(p.feeDen)*100)
+				if jsonOut {
+					result := map[string]any{
+						"pool_id":  p.lpAsset,
+						"asset0":   p.asset0,
+						"asset1":   p.asset1,
+						"fee_rate": feeStr,
+						"reserve0": p.reserve0,
+						"reserve1": p.reserve1,
+						"pool_a":   p.poolAAddr,
+						"pool_b":   p.poolBAddr,
+						"closed":   p.closed,
+					}
+					if p.reserve0 > 0 && p.reserve1 > 0 {
+						result["price"] = float64(p.reserve1) / float64(p.reserve0)
+					}
+					enc := json.NewEncoder(os.Stdout)
+					enc.SetIndent("", "  ")
+					return enc.Encode(result)
+				}
 				status := ""
 				if p.closed {
 					status = " [closed]"
@@ -65,6 +87,36 @@ func cmdPoolInfo() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			totalSupply := state.TotalSupply()
+			if jsonOut {
+				result := map[string]any{
+					"reserve0":      state.Reserve0,
+					"reserve1":      state.Reserve1,
+					"total_supply":  totalSupply,
+					"lp_reserve":    state.LPReserve,
+					"pool_a_utxo":   fmt.Sprintf("%s:%d", state.PoolATxID, state.PoolAVout),
+					"pool_b_utxo":   fmt.Sprintf("%s:%d", state.PoolBTxID, state.PoolBVout),
+					"lp_reserve_utxo": fmt.Sprintf("%s:%d", state.LpReserveTxID, state.LpReserveVout),
+				}
+				if cfg.LPAssetID != "" {
+					result["pool_id"] = cfg.LPAssetID
+				}
+				if cfg.Asset0 != "" {
+					result["asset0"] = cfg.Asset0
+				}
+				if cfg.Asset1 != "" {
+					result["asset1"] = cfg.Asset1
+				}
+				if cfg.FeeNum > 0 && cfg.FeeDen > 0 {
+					result["fee_rate"] = fmt.Sprintf("%.2f%%", float64(cfg.FeeDen-cfg.FeeNum)/float64(cfg.FeeDen)*100)
+				}
+				if state.Reserve0 > 0 && state.Reserve1 > 0 {
+					result["price"] = float64(state.Reserve1) / float64(state.Reserve0)
+				}
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(result)
+			}
 			if cfg.LPAssetID != "" {
 				fmt.Printf("Pool ID:            %s\n", cfg.LPAssetID)
 			}
@@ -80,7 +132,6 @@ func cmdPoolInfo() *cobra.Command {
 			}
 			fmt.Printf("Reserve0 (Asset0):  %d sats\n", state.Reserve0)
 			fmt.Printf("Reserve1 (Asset1):  %d sats\n", state.Reserve1)
-			totalSupply := state.TotalSupply()
 			fmt.Printf("Total Supply (LP):  %d\n", totalSupply)
 			fmt.Printf("LP Reserve:         %d\n", state.LPReserve)
 			if state.Reserve0 > 0 && state.Reserve1 > 0 {
@@ -93,6 +144,7 @@ func cmdPoolInfo() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output in JSON format")
 	cmd.Flags().StringVar(&poolID, "pool-id", "", "Look up pool by LP asset / pool ID (via Esplora)")
 	cmd.Flags().StringVar(&poolFile, "pool", "pool.json", "Pool config file")
 	cmd.Flags().StringVar(&esploraURL, "esplora-url", "", "Esplora API URL (env: ANCHOR_ESPLORA_URL)")

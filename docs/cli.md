@@ -2,6 +2,16 @@
 
 All commands support interactive **wizard mode** when run without required flags in a terminal. Wizards prompt for missing values, auto-select UTXOs from the wallet, and confirm before broadcasting.
 
+## Machine-Readable Output (`--json`)
+
+All query and operation commands support `--json` for machine-readable JSON output. When `--json` is set, results are printed to stdout as a single JSON object (or array for `find-pools`). Human-readable output and prompts go to stderr and are suppressed where appropriate.
+
+Supported on: `pool-info`, `swap`, `add-liquidity`, `remove-liquidity`, `find-pools`, `check`, and all `wallet` subcommands.
+
+## Fee Estimation
+
+Fee estimation uses `getmempoolinfo` for sub-sat/vB precision (e.g., 0.1 sat/vB on Elements), falling back to `estimatesmartfee`. The fee is computed as `ceil(rate × vsize)` — rounding at the total, not the rate — to avoid overpaying by 10× on low-fee networks.
+
 ## Environment Variables
 
 All commands with RPC or network flags support environment variable fallback (flag > env > default):
@@ -35,6 +45,7 @@ anchor check [flags]
 
 | Flag | Default | Description |
 |------|---------|-------------|
+| `--json` | `false` | Output in JSON format |
 | `--pool` | `pool.json` | Pool config file |
 | `--rpc-url` | | Elements RPC URL |
 | `--rpc-user` | | RPC username |
@@ -273,3 +284,48 @@ Burn amount is capped to preserve a dust minimum (330 sats) in each pool output.
 | `--rpc-user` | | RPC username |
 | `--rpc-pass` | | RPC password |
 | `--network` | | Network |
+
+---
+
+## wallet
+
+Wallet utility subcommands that mirror Elements CLI naming. All subcommands share `--rpc-url`, `--rpc-user`, `--rpc-pass`, `--wallet`, `--network`, `--lbtc-asset`, and `--json` flags.
+
+### wallet getbalance
+
+Show wallet asset balances (explicit UTXOs only).
+
+```
+anchor wallet getbalance [--asset <id>]
+```
+
+Without `--asset`, lists all assets. With `--asset`, shows balance for that specific asset.
+
+### wallet listunspent
+
+List unspent outputs (explicit only).
+
+```
+anchor wallet listunspent [--asset <id>]
+```
+
+### wallet getnewaddress
+
+Generate and print a new unconfidential receiving address.
+
+```
+anchor wallet getnewaddress
+```
+
+### wallet sendtoaddress
+
+Send funds to an address. Default asset is L-BTC.
+
+```
+anchor wallet sendtoaddress <address> <amount> [--asset <id>] [--yes]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--asset` | | Asset ID to send (default: L-BTC) |
+| `--yes` | `false` | Skip confirmation prompt |

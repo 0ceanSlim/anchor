@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/0ceanslim/anchor/pkg/rpc"
@@ -14,6 +16,7 @@ func cmdFindPools() *cobra.Command {
 	var startBlock, saveIndex int
 	var save bool
 	var saveFile, buildDir string
+	var jsonOut bool
 	cmd := &cobra.Command{
 		Use:   "find-pools",
 		Short: "Scan the chain for Anchor pools matching an asset pair or pool ID",
@@ -33,8 +36,26 @@ func cmdFindPools() *cobra.Command {
 					return err
 				}
 
-				// Display.
 				feeStr := fmt.Sprintf("%.2f%%", float64(p.feeDen-p.feeNum)/float64(p.feeDen)*100)
+
+				if jsonOut {
+					enc := json.NewEncoder(os.Stdout)
+					enc.SetIndent("", "  ")
+					return enc.Encode([]map[string]any{{
+						"pool_id":  p.lpAsset,
+						"asset0":   p.asset0,
+						"asset1":   p.asset1,
+						"fee_rate": feeStr,
+						"reserve0": p.reserve0,
+						"reserve1": p.reserve1,
+						"pool_a":   p.poolAAddr,
+						"pool_b":   p.poolBAddr,
+						"height":   p.height,
+						"closed":   p.closed,
+					}})
+				}
+
+				// Display.
 				status := ""
 				if p.closed {
 					status = " [closed]"
@@ -75,8 +96,34 @@ func cmdFindPools() *cobra.Command {
 				return err
 			}
 			if len(entries) == 0 {
+				if jsonOut {
+					fmt.Println("[]")
+					return nil
+				}
 				fmt.Println("No compatible Anchor pools found.")
 				return nil
+			}
+
+			if jsonOut {
+				var out []map[string]any
+				for _, e := range entries {
+					feeStr := fmt.Sprintf("%.2f%%", float64(e.feeDen-e.feeNum)/float64(e.feeDen)*100)
+					out = append(out, map[string]any{
+						"pool_id":  e.lpAsset,
+						"asset0":   e.asset0,
+						"asset1":   e.asset1,
+						"fee_rate": feeStr,
+						"reserve0": e.reserve0,
+						"reserve1": e.reserve1,
+						"pool_a":   e.poolAAddr,
+						"pool_b":   e.poolBAddr,
+						"height":   e.height,
+						"closed":   e.closed,
+					})
+				}
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				return enc.Encode(out)
 			}
 
 			// Display table.
@@ -130,6 +177,7 @@ func cmdFindPools() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output in JSON format")
 	cmd.Flags().StringVar(&poolID, "pool-id", "", "Look up a specific pool by LP asset / pool ID")
 	cmd.Flags().StringVar(&asset0, "asset0", "", "Asset0 ID to filter by (case-insensitive)")
 	cmd.Flags().StringVar(&asset1, "asset1", "", "Asset1 ID to filter by (case-insensitive)")

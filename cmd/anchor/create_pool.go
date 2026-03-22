@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"sort"
 	"strconv"
@@ -248,7 +249,7 @@ func cmdCreatePool() *cobra.Command {
 							addCfg.LPAssetID = sel.lpAsset
 							addCfg.FeeNum = selFeeNum
 							addCfg.FeeDen = selFeeDen
-							return runAddLiquidityWizard(addCfg, walletClient, nodeClient, lbtcAsset, balances, broadcast)
+							return runAddLiquidityWizard(addCfg, walletClient, nodeClient, lbtcAsset, balances, broadcast, false)
 						}
 						fmt.Fprintf(os.Stderr, "\nTo skip discovery: anchor create-pool --force --asset0 %s --asset1 %s\n", asset0, asset1)
 						return nil
@@ -285,24 +286,22 @@ func cmdCreatePool() *cobra.Command {
 
 				// ── Network fee rate ──────────────────────────────────────────────────────────
 				if !cmd.Flags().Changed("fee") {
-					feeRate := uint64(1)
-					if estimated, err := nodeClient.EstimateSmartFee(2); err == nil && estimated > 0 {
-						feeRate = estimated
+					rate := estimateFeeRate(nodeClient)
+					defaultRate := uint64(math.Ceil(rate))
+					if defaultRate < 1 {
+						defaultRate = 1
 					}
-					feeRate = promptUint64(fmt.Sprintf("Network fee rate [default: %d sat/vbyte]: ", feeRate), feeRate)
-					fee = feeRate * createPoolVbytes
+					userRate := promptUint64(fmt.Sprintf("Network fee rate [default: %d sat/vbyte]: ", defaultRate), defaultRate)
+					fee = computeFee(createPoolVbytes, float64(userRate))
 					fmt.Fprintf(os.Stderr, "Total network fee: %d sats\n", fee)
 				}
 			}
 
 			// Non-wizard fee estimation (all flags provided — no prompt).
 			if !cmd.Flags().Changed("fee") && !wizardNeeded {
-				feeRate := uint64(1)
-				if estimated, err := nodeClient.EstimateSmartFee(2); err == nil && estimated > 0 {
-					feeRate = estimated
-				}
-				fee = feeRate * createPoolVbytes
-				fmt.Fprintf(os.Stderr, "Estimated fee: %d sats (%d sat/vbyte)\n", fee, feeRate)
+				rate := estimateFeeRate(nodeClient)
+				fee = computeFee(createPoolVbytes, rate)
+				fmt.Fprintf(os.Stderr, "Estimated fee: %d sats (%.1f sat/vB)\n", fee, rate)
 			}
 
 			// 1. Patch .args with asset IDs and fee params, then compile fresh.

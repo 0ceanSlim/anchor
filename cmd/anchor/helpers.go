@@ -10,6 +10,7 @@ import (
 
 	"github.com/0ceanslim/anchor/pkg/compiler"
 	"github.com/0ceanslim/anchor/pkg/pool"
+	"github.com/0ceanslim/anchor/pkg/rpc"
 	"github.com/0ceanslim/anchor/pkg/tx"
 	"github.com/spf13/cobra"
 	"github.com/vulpemventures/go-elements/network"
@@ -331,6 +332,43 @@ func savePoolFromDiscovered(p *discoveredPool, buildDir string, net *network.Net
 	fmt.Fprintf(os.Stderr, "  lp_reserve: %s\n", cfg.LpReserve.Address)
 	fmt.Fprintf(os.Stderr, "  lp_asset: %s\n", p.lpAsset)
 	return outFile, nil
+}
+
+// estimateFeeRate returns the best fee rate in sat/vb.
+// Tries getmempoolinfo first (sub-sat precision), falls back to estimatesmartfee.
+func estimateFeeRate(client *rpc.Client) float64 {
+	if rate, err := client.GetMempoolMinFee(); err == nil && rate > 0 {
+		return rate
+	}
+	if rate, err := client.EstimateSmartFee(2); err == nil && rate > 0 {
+		return float64(rate)
+	}
+	return 0.1 // Elements minimum
+}
+
+// computeFee returns total fee in satoshis for a given vsize and rate.
+func computeFee(vsizeEstimate uint64, rate float64) uint64 {
+	fee := uint64(math.Ceil(rate * float64(vsizeEstimate)))
+	if fee < 1 {
+		fee = 1
+	}
+	return fee
+}
+
+// refineFee computes the fee from the actual serialized tx size.
+// Returns the refined fee and whether it changed significantly (>10% from original).
+func refineFee(txHex string, rate float64, originalFee uint64) (uint64, bool) {
+	raw, err := hex.DecodeString(txHex)
+	if err != nil {
+		return originalFee, false
+	}
+	actualVsize := uint64(len(raw))
+	refined := computeFee(actualVsize, rate)
+	diff := int64(refined) - int64(originalFee)
+	if diff < 0 {
+		diff = -diff
+	}
+	return refined, uint64(diff) > originalFee/10
 }
 
 // revBytes returns a reversed copy of b.

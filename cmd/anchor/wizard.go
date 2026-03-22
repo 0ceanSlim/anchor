@@ -3,7 +3,9 @@ package main
 import (
 	"bufio"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"sort"
 	"strconv"
@@ -556,6 +558,7 @@ func runAddLiquidityWizard(
 	lbtcAsset string,
 	balances map[string]uint64,
 	broadcast bool,
+	jsonOut bool,
 ) error {
 	state, err := pool.Query(cfg, nodeClient)
 	if err != nil {
@@ -619,12 +622,13 @@ func runAddLiquidityWizard(
 	fmt.Fprintf(os.Stderr, "LP tokens to receive: %d\n", lpMinted)
 
 	const addLiqVbytes uint64 = 1400
-	feeRate := uint64(1)
-	if est, err := nodeClient.EstimateSmartFee(2); err == nil && est > 0 {
-		feeRate = est
+	rate := estimateFeeRate(nodeClient)
+	defaultRate := uint64(math.Ceil(rate))
+	if defaultRate < 1 {
+		defaultRate = 1
 	}
-	feeRate = promptUint64(fmt.Sprintf("Network fee rate [default: %d sat/vbyte]: ", feeRate), feeRate)
-	fee := feeRate * addLiqVbytes
+	userRate := promptUint64(fmt.Sprintf("Network fee rate [default: %d sat/vbyte]: ", defaultRate), defaultRate)
+	fee := computeFee(addLiqVbytes, float64(userRate))
 	fmt.Fprintf(os.Stderr, "Total network fee: %d sats\n", fee)
 
 	fmt.Fprintln(os.Stderr, "\n-----------------------------------------")
@@ -738,7 +742,7 @@ func runAddLiquidityWizard(
 	return execAddLiquidity(cfg, state, deposit0, deposit1,
 		a0inputs, a1inputs, lbInputs,
 		cfg.Asset0, cfg.Asset1, lbtcAsset, cfg.LPAssetID,
-		changeAddr, userAddr, fee, walletClient, broadcast)
+		changeAddr, userAddr, fee, walletClient, broadcast, jsonOut)
 }
 
 // execAddLiquidity builds and (optionally) broadcasts an add-liquidity transaction.
@@ -753,6 +757,7 @@ func execAddLiquidity(
 	fee uint64,
 	walletClient *rpc.Client,
 	broadcast bool,
+	jsonOut bool,
 ) error {
 	params := &tx.AddLiquidityParams{
 		State:                 state,
@@ -786,9 +791,20 @@ func execAddLiquidity(
 	if err != nil {
 		return err
 	}
-	fmt.Printf("LP Minted: %d sat\n", result.LPMinted)
 
 	if !broadcast {
+		if jsonOut {
+			enc := json.NewEncoder(os.Stdout)
+			enc.SetIndent("", "  ")
+			return enc.Encode(map[string]any{
+				"tx_hex":    result.TxHex,
+				"deposit0":  deposit0,
+				"deposit1":  deposit1,
+				"lp_minted": result.LPMinted,
+				"fee":       fee,
+			})
+		}
+		fmt.Printf("LP Minted: %d sat\n", result.LPMinted)
 		fmt.Printf("Tx (hex): %s\n", result.TxHex)
 		fmt.Fprintln(os.Stderr, "(use --broadcast to sign and send)")
 		return nil
@@ -819,6 +835,18 @@ func execAddLiquidity(
 	if err != nil {
 		return translateError(fmt.Errorf("broadcast: %w", err))
 	}
+	if jsonOut {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(map[string]any{
+			"txid":      txid,
+			"deposit0":  deposit0,
+			"deposit1":  deposit1,
+			"lp_minted": result.LPMinted,
+			"fee":       fee,
+		})
+	}
+	fmt.Printf("LP Minted: %d sat\n", result.LPMinted)
 	fmt.Printf("Txid: %s\n", txid)
 	return nil
 }

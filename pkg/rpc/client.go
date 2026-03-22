@@ -419,6 +419,22 @@ func (c *Client) SendMany(outputs map[string]uint64, assetID string) (string, er
 	return txid, err
 }
 
+// GetMempoolMinFee returns the minimum fee rate (sat/vb) that will get
+// accepted into the mempool. Returns 0.1 as fallback (Elements minimum).
+func (c *Client) GetMempoolMinFee() (float64, error) {
+	var result struct {
+		MempoolMinFee float64 `json:"mempoolminfee"`
+	}
+	if err := c.call("getmempoolinfo", []any{}, &result); err != nil {
+		return 0.1, err
+	}
+	satPerVb := result.MempoolMinFee * 100_000 // BTC/kB → sat/vB
+	if satPerVb < 0.1 {
+		satPerVb = 0.1
+	}
+	return satPerVb, nil
+}
+
 // EstimateSmartFee returns an estimated fee rate in sat/vb for the given
 // confirmation target. Returns 1 sat/vb as a fallback if the node cannot
 // estimate (e.g. insufficient data on regtest).

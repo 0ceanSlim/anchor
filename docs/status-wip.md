@@ -1,29 +1,28 @@
 # Anchor AMM — Roadmap
 
-## Current State (as of 2026-03-21)
+## Current State (as of 2026-03-22)
 
 All 4 operations (create-pool, swap, add-liquidity, remove-liquidity) confirmed on Liquid
 testnet with the LP Reserve architecture. No reissuance dependencies. Fully permissionless.
 
 **Protocol status: COMPLETE.**
-**CLI/UX status: Phase 2 COMPLETE.** All commands have interactive wizard modes,
-auto-resolve pool configs from `pools/`, and support Esplora-backed pool discovery.
+**CLI/UX status: Phase 3 COMPLETE.** All commands have interactive wizard modes,
+auto-resolve pool configs from `pools/`, support Esplora-backed pool discovery,
+`--json` output, improved fee estimation, and wallet utility commands.
 
-**Work remaining: Phase 3+ (quality-of-life, mempool awareness, distribution).**
+**Work remaining: Phase 4+ (mempool awareness, distribution).**
 
 ---
 
-## Phase 3 — CLI Quick Wins
+## Phase 3 — CLI Quick Wins ✓
 
 Small improvements that don't require protocol changes.
 
-- [ ] `anchor quote` — print expected output + price impact without building a tx
-- [ ] `--min-out <sats>` — abort swap if computed output falls below threshold (slippage)
-- [ ] `--json` flag on all subcommands (web UI readiness)
-- [ ] Fee estimation two-pass refinement: build tx -> measure actual vsize -> recompute fee
-- [ ] `pool-info --json`: `{"reserve0": N, "reserve1": N, "total_supply": N, ...}`
-- [ ] `swap/add/remove --json`: `{"txid": "hex", "amount_in": N, "amount_out": N}`
-- [ ] Wallet passthrough commands (`anchor wallet balance`, `listunspent`, `send`, etc.)
+- [x] `--min-out <sats>` — abort swap if computed output falls below threshold (slippage)
+- [x] `--json` flag on all subcommands (web UI readiness): `pool-info`, `swap`, `add-liquidity`, `remove-liquidity`, `find-pools`, `check`, `wallet`
+- [x] Fee estimation improvement: `getmempoolinfo` for sub-sat/vB precision, `ceil(rate × vsize)` rounding
+- [x] `anchor wallet` subcommands: `getbalance`, `listunspent`, `getnewaddress`, `sendtoaddress`
+- ~~`anchor quote`~~ — unnecessary; swap wizard already shows quote before confirmation
 
 ---
 

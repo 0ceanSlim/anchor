@@ -24,6 +24,7 @@ func cmdAddLiquidity() *cobra.Command {
 		broadcast                                                 bool
 		walletName                                                string
 		poolID, esploraURL                                        string
+		jsonOut                                                   bool
 	)
 	cmd := &cobra.Command{
 		Use:   "add-liquidity",
@@ -186,7 +187,7 @@ func cmdAddLiquidity() *cobra.Command {
 				wizCfg.LPAssetID = wizLPAsset
 				wizCfg.FeeNum = wizFeeNum
 				wizCfg.FeeDen = wizFeeDen
-				return runAddLiquidityWizard(wizCfg, wc, client, lbtcAsset, balances, broadcast)
+				return runAddLiquidityWizard(wizCfg, wc, client, lbtcAsset, balances, broadcast, jsonOut)
 			}
 
 			// ── Flag mode: load pool config and proceed ────────────────────────────────
@@ -228,10 +229,9 @@ func cmdAddLiquidity() *cobra.Command {
 
 			// Estimate fee if not explicitly set.
 			if !cmd.Flags().Changed("fee") {
-				if estimated, err := client.EstimateSmartFee(2); err == nil {
-					fee = estimated * 1400 // ~1400 vbytes for add-liquidity tx
-					fmt.Fprintf(os.Stderr, "Estimated fee: %d sats\n", fee)
-				}
+				rate := estimateFeeRate(client)
+				fee = computeFee(1400, rate) // ~1400 vbytes for add-liquidity tx
+				fmt.Fprintf(os.Stderr, "Estimated fee: %d sats (%.1f sat/vB)\n", fee, rate)
 			}
 
 			// Enforce proportional deposit: deposit1 must equal floor(deposit0 * reserve1 / reserve0).
@@ -395,9 +395,10 @@ func cmdAddLiquidity() *cobra.Command {
 				toInputs(asset1UTXO, asset1Amount),
 				toInputs(lbtcUTXO, lbtcAmount),
 				asset0, asset1, lbtcAsset, lpAssetID,
-				changeAddr, userAddr, fee, walletClient, broadcast)
+				changeAddr, userAddr, fee, walletClient, broadcast, jsonOut)
 		},
 	}
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output in JSON format")
 	cmd.Flags().StringVar(&poolFile, "pool", "pool.json", "Pool config file")
 	cmd.Flags().Uint64Var(&deposit0, "deposit0", 0, "Asset0 amount to deposit (required)")
 	cmd.Flags().Uint64Var(&deposit1, "deposit1", 0, "Asset1 amount to deposit (required)")
