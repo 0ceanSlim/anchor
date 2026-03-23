@@ -107,20 +107,36 @@ stable home regardless of the user's working directory.
 **Result:** Users can run `anchor` from any directory. Pool state and contracts live in a
 predictable, platform-standard location.
 
-### 5.3 Contract Embedding
+### 5.3 Cookie Auth
+
+Elements nodes write a `.cookie` file on startup with auto-generated RPC credentials.
+Supporting cookie auth eliminates the need for plaintext passwords in environment variables
+for local nodes — matching how `elements-cli` authenticates.
+
+**Changes:**
+- `--rpc-cookie` flag / `ANCHOR_RPC_COOKIE` env var pointing to the `.cookie` file path
+- `pkg/rpc/client.go` — `NewFromCookie(url, cookiePath)` reads `user:pass` from the file
+- Auto-discovery: if no user/pass set, check `<elements-datadir>/.cookie` (ties into 5.2
+  if `ANCHOR_ELEMENTS_DATADIR` or `config.toml` provides the path)
+- Fallback order: explicit flags → env vars → cookie file → error
+
+**Result:** Local node users run `anchor` with zero credential configuration. Remote node
+users continue using env vars or flags.
+
+### 5.4 Contract Embedding
 
 Embed compiled `.shl` files in the binary via `//go:embed`.
 Users need only `simc` + Elements node + Esplora — no build directory management.
 On first run, embedded contracts extract to `datadir.ContractsDir()`.
 
-### 5.4 Cleanup
+### 5.5 Cleanup
 
 - [ ] Remove `replace` directive from `go.mod`
 - [ ] Delete dead contracts: `contracts/lp_supply*.go`, `build/pool_a.shl`, `build/pool_b.shl`
 - [ ] `LICENSE` — MIT, 2025, 0ceanslim
 - [ ] `.gitignore`: add `pool.json`, `build/staging/`
 
-### 5.5 CI/CD
+### 5.6 CI/CD
 
 ```yaml
 jobs:

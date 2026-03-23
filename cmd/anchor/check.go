@@ -33,24 +33,28 @@ func cmdCheck() *cobra.Command {
 			poolsFound := 0
 
 			ok := true
-			check := func(label, value, hint string) {
+			check := func(label, value, hint string, mask bool) {
 				if value == "" {
 					if !jsonOut {
 						fmt.Printf("  MISSING  %s — %s\n", label, hint)
 					}
 					ok = false
 				} else if !jsonOut {
-					fmt.Printf("  OK       %s = %s\n", label, value)
+					display := value
+					if mask {
+						display = "****"
+					}
+					fmt.Printf("  OK       %s = %s\n", label, display)
 				}
 			}
 
 			if !jsonOut {
 				fmt.Println("Environment variables:")
 			}
-			check("ANCHOR_RPC_URL", rpcURL, "set ANCHOR_RPC_URL or use --rpc-url")
-			check("ANCHOR_RPC_USER", rpcUser, "set ANCHOR_RPC_USER or use --rpc-user")
-			check("ANCHOR_RPC_PASS", rpcPass, "set ANCHOR_RPC_PASS or use --rpc-pass")
-			check("ANCHOR_NETWORK", os.Getenv("ANCHOR_NETWORK"), "set ANCHOR_NETWORK (liquid/testnet/regtest) or use --network")
+			check("ANCHOR_RPC_URL", rpcURL, "set ANCHOR_RPC_URL or use --rpc-url", false)
+			check("ANCHOR_RPC_USER", rpcUser, "set ANCHOR_RPC_USER or use --rpc-user", false)
+			check("ANCHOR_RPC_PASS", rpcPass, "set ANCHOR_RPC_PASS or use --rpc-pass", true)
+			check("ANCHOR_NETWORK", os.Getenv("ANCHOR_NETWORK"), "set ANCHOR_NETWORK (liquid/testnet/regtest) or use --network", false)
 
 			if !jsonOut {
 				fmt.Println("\nRPC connection:")
