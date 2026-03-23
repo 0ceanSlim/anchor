@@ -148,17 +148,36 @@ go build $(GOFLAGS) -o $(BINARY) ./cmd/anchor
 
 .PHONY: test
 test:
-go test ./...
+go test ./pkg/...
 
 # ------------------------------------------------------------
 
-# Integration tests
+# Esplora integration
+
+# ------------------------------------------------------------
+
+.PHONY: test-esplora
+test-esplora:
+go test -tags esplora ./tests/... -v
+
+# ------------------------------------------------------------
+
+# Full integration (testnet)
 
 # ------------------------------------------------------------
 
 .PHONY: test-integration
 test-integration:
-go test -tags integration ./tests/... -v
+go test -tags integration ./tests/... -v -timeout 60m
+
+# ------------------------------------------------------------
+
+# All tests
+
+# ------------------------------------------------------------
+
+.PHONY: test-all
+test-all: test test-esplora test-integration
 
 # ------------------------------------------------------------
 

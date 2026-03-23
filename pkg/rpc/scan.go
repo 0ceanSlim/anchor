@@ -72,7 +72,7 @@ func parseAnchorOutput(scriptHex, txid string, height int) (PoolCreationRecord, 
 		return PoolCreationRecord{}, false
 	}
 	// Decode the 73-byte payload (skip leading "6a49")
-	payload, err := hex.DecodeString(scriptHex[4:76+4]) // 4 = len("6a49"), 146 = 73*2
+	payload, err := hex.DecodeString(scriptHex[4 : 4+146]) // 4 = len("6a49"), 146 = 73*2
 	if err != nil || len(payload) < 73 {
 		return PoolCreationRecord{}, false
 	}

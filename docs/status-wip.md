@@ -62,19 +62,65 @@ design including chain invalidation concerns.
 
 ## Phase 5 — Build & Distribution
 
-### 5.1 Contract Embedding
+### 5.1 simc CLI Args Migration
 
-Embed compiled `.shl` and `.args` files in the binary via `//go:embed`.
+The upstream simc PR has been merged — simc now accepts contract arguments as CLI flags
+instead of requiring a separate `.args` file. This eliminates the fragile `.args` file
+patching in `pkg/compiler/compiler.go` (writing temp files, managing paths, cleanup).
+
+**Changes:**
+- `pkg/compiler/compiler.go` — replace `writeArgsFile()` + file-based invocation with
+  direct CLI flag passing (e.g. `simc compile --arg lp_asset:<hex> pool_creation.shl`)
+- Remove all `.args` file generation, temp-file cleanup, and related error handling
+- `build/` directory simplifies to only `.shl` source files — no `.args` files needed
+- Update `//go:embed` patterns (Phase 5.3) to skip `.args` since they no longer exist
+
+**Result:** Simpler build directory, fewer moving parts in the compiler package, no temp
+file race conditions.
+
+### 5.2 Data Directory
+
+Platform-appropriate default data directory so pool configs and contract sources have a
+stable home regardless of the user's working directory.
+
+**Default paths:**
+- Linux/macOS: `~/.anchor/`
+- Windows: `%APPDATA%\Anchor\`
+
+**Layout:**
+```
+~/.anchor/
+  contracts/     # .shl source files (extracted from embedded or user-supplied)
+  pools/         # pool.json configs (created by create-pool, used by other commands)
+  config.toml    # optional: default RPC host, Esplora URL, fee preferences
+```
+
+**Changes:**
+- New `pkg/datadir/datadir.go` — `Default() string`, `ContractsDir()`, `PoolsDir()`,
+  respects `ANCHOR_DATADIR` env var override
+- All commands resolve pool configs from `datadir.PoolsDir()` instead of `./pools/`
+- `create-pool` writes `pool.json` into the data dir
+- `find-pools` saves discovered pools into the data dir
+- Prerequisite for contract embedding (5.3) — embedded contracts extract to
+  `datadir.ContractsDir()` on first run
+
+**Result:** Users can run `anchor` from any directory. Pool state and contracts live in a
+predictable, platform-standard location.
+
+### 5.3 Contract Embedding
+
+Embed compiled `.shl` files in the binary via `//go:embed`.
 Users need only `simc` + Elements node + Esplora — no build directory management.
+On first run, embedded contracts extract to `datadir.ContractsDir()`.
 
-### 5.2 Cleanup
+### 5.4 Cleanup
 
 - [ ] Remove `replace` directive from `go.mod`
 - [ ] Delete dead contracts: `contracts/lp_supply*.go`, `build/pool_a.shl`, `build/pool_b.shl`
 - [ ] `LICENSE` — MIT, 2025, 0ceanslim
 - [ ] `.gitignore`: add `pool.json`, `build/staging/`
 
-### 5.3 CI/CD
+### 5.5 CI/CD
 
 ```yaml
 jobs:
